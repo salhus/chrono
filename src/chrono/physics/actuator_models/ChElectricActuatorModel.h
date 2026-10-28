@@ -28,6 +28,8 @@ namespace chrono {
 namespace actuator_models {
 
 /// DC-equivalent electric actuator with optional winding-current dynamics and a passive, bidirectional gearbox.
+/// Gear loss is load-dependent friction, C1 in output speed at fixed current; exact efficiency branches apply
+/// outside loss_smoothing_speed. See ActuatorTransmissionLoss and the actuator manual for the law and slope bound.
 /// Positive terminal power is drawn from the bus. Disabling selects zero voltage (shorted winding), not an open circuit.
 /// All evaluations are pure; winding current is owned and integrated by the caller when inductance is positive.
 class ChElectricActuatorModel : public ChActuatorModel {
@@ -78,7 +80,8 @@ class ChElectricActuatorModel : public ChActuatorModel {
     /// Current limiting blocks outward derivatives at either bound; inward derivatives remain unconstrained.
     /// This represents a dissipative ideal current limiter, not an open circuit or a regenerative bus controller.
     /// Bounds depend on speed: an integrator must resolve moving-limit crossings. Effort and telemetry project
-    /// numerical overshoots, but do not reset the stored current or enforce moving-bound complementarity.
+    /// overshoots, but do not reset the stored current or enforce moving-bound complementarity. A shrinking
+    /// bound can overtake the stored state even with exact integration; projected and stored current then differ.
     void CalculateRHS(double, const std::vector<double>& y, const ActuatorCommand& command, const ActuatorState& state, std::vector<double>& rhs) const override {
         rhs.assign(GetNumStates(), 0);
         if (GetNumStates() == 0)
@@ -94,7 +97,7 @@ class ChElectricActuatorModel : public ChActuatorModel {
     }
 
     /// Exact state derivative on each smooth branch; the active outward clamp has a zero Jacobian row.
-    bool CalculateJacobian(double time,
+    bool CalculateJacobian(double,
                            const std::vector<double>& y,
                            const ActuatorCommand& command,
                            const ActuatorState& state,

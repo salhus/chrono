@@ -29,16 +29,17 @@ inline double ActuatorSmoothStep(double q) {
 
 /// Passive load-dependent loss torque (or force) at the output.
 /// With x=velocity/smoothing_speed, s(x)=sign(x)*h(2|x|) reaches +/-1 at |x|=1/2.
-/// The coefficient changes from (cm+cg)/2 to cm or cg only on 1/2<|x|<1.
-/// The two derivative supports do not overlap: |d(loss)/d(velocity)| <= 3*max(cm,cg)*|effort|/smoothing_speed.
+/// The directional coefficient is cm*h(|x|) or cg*h(|x|), smoothly continued through zero at standstill.
+/// This prevents the opposite quadrant's losses from reversing motoring effort inside the band.
+/// |d(loss)/d(velocity)| <= 3*max(cm,cg)*|effort|/smoothing_speed (see manual for the product bound).
 /// Both factors are C1 in velocity, loss*velocity>=0, and the directional branches are exact at |x|>=1.
 /// The caller must supply finite smoothing_speed>0 and nonnegative loss coefficients cm and cg.
 inline double ActuatorTransmissionLoss(double effort, double velocity, double smoothing_speed, double cm, double cg) {
     double x = velocity / smoothing_speed;
     double magnitude = std::abs(x);
     double sign = std::copysign(ActuatorSmoothStep(2 * magnitude), x);
-    double quadrant = std::copysign(ActuatorSmoothStep(2 * magnitude - 1), effort) * std::copysign(1.0, x);
-    double coefficient = 0.5 * (cm + cg) + 0.5 * (cm - cg) * quadrant;
+    double directional_coefficient = std::signbit(effort) == std::signbit(velocity) ? cm : cg;
+    double coefficient = directional_coefficient * ActuatorSmoothStep(magnitude);
     return coefficient * std::abs(effort) * sign;
 }
 
