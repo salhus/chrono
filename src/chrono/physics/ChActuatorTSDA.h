@@ -12,7 +12,7 @@
 // Authors: Radu Serban
 // =============================================================================
 //
-// Linear actuator wrapping .
+// Linear actuator wrapping a spring-damper actuator.
 //
 // =============================================================================
 
@@ -25,10 +25,10 @@ namespace chrono {
 
 /// TSDA linear actuator.
 /// The actuator force includes elastic and damping components, a constant actuation force, and a component modulated by the input function:
-/// F = f0 + f * u(time) + k * (l = l0) + c * ld
+/// F = f0 + f * u(time) - k * (l - l0) - c * ld
 class ChActuatorTSDA : public ChLinearActuator {
   public:
-    ChActuatorTSDA() : m_k(0), m_r(0), m_f(0), m_rest_length(0) {}
+    ChActuatorTSDA() : m_k(0), m_r(0), m_f(0), m_f0(0), m_rest_length(0) {}
     ~ChActuatorTSDA() {}
 
     /// Set spring coefficient (default: 0).

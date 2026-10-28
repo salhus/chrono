@@ -162,7 +162,7 @@ void ChLinearActuator::Update(double time, UpdateFlags update_flags) {
 
 // -----------------------------------------------------------------------------
 
-ChRotationalActuator::ChRotationalActuator() : ChActuator() {}
+ChRotationalActuator::ChRotationalActuator() : ChActuator(), m_turns(0), m_last_angle(0) {}
 
 void ChRotationalActuator::SetActuatorInitialAngle(double angle) {
     a_0 = angle;
@@ -214,7 +214,7 @@ void ChRotationalActuator::AdjustAngle() {
     if (m_last_angle > CH_PI_2 && a < 0)
         a += CH_2PI;
     if (m_last_angle < -CH_PI_2 && a > 0)
-        a -= CH_PI_2;
+        a -= CH_2PI;
 
     // Accumulate full turns
     if (m_last_angle - a > CH_PI)
