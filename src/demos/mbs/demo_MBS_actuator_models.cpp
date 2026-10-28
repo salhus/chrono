@@ -83,6 +83,7 @@ void Run(double initial_speed, const char* phase, bool oscillatory = false) {
     double bus_energy = 0;
     double copper_energy = 0;
     double gear_energy = 0;
+    double previous_speed = initial_speed;
     auto previous = actuator->GetTelemetry(0);
     for (int i = 0; i <= steps; ++i) {
         double time = system.GetChTime();
@@ -93,11 +94,14 @@ void Run(double initial_speed, const char* phase, bool oscillatory = false) {
             copper_energy += 0.5 * step * (previous.copper_loss + telemetry.copper_loss);
             gear_energy += 0.5 * step * (previous.gear_loss + telemetry.gear_loss);
         }
-        if (i % 2000 == 0 || (oscillatory && std::abs(speed) < 3 * parameters.loss_smoothing_speed && i % 10 == 0)) {
+        bool near_reversal =
+            oscillatory && (speed * previous_speed < 0 || ((std::abs(speed) <= parameters.loss_smoothing_speed) != (std::abs(previous_speed) <= parameters.loss_smoothing_speed)));
+        if (i % 2000 == 0 || near_reversal) {
             std::cout << time << "," << speed << "," << telemetry.applied_effort << "," << telemetry.mechanical_power << "," << telemetry.electrical_power << ","
                       << telemetry.copper_loss << "," << telemetry.gear_loss << "," << telemetry.current << "," << telemetry.efficiency << "\n";
         }
         previous = telemetry;
+        previous_speed = speed;
         if (i < steps)
             system.DoStepDynamics(step);
     }
