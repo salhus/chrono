@@ -19,7 +19,7 @@ namespace chrono {
 // Perturbation for finite-difference Jacobian approximation
 const double ChExternalDynamicsODE::m_FD_delta = 1e-8;
 
-ChExternalDynamicsODE::ChExternalDynamicsODE() {}
+ChExternalDynamicsODE::ChExternalDynamicsODE() : m_nstates(0), m_variables(nullptr) {}
 ChExternalDynamicsODE::~ChExternalDynamicsODE() {
     delete m_variables;
 }
