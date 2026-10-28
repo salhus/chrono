@@ -285,14 +285,21 @@ source_group(physics\\loads FILES ${Chrono_physics_loads_SOURCES} ${Chrono_physi
 
 set(Chrono_physics_actuators_SOURCES
     physics/ChActuator.cpp
+    physics/ChActuatorModelLinear.cpp
+    physics/ChActuatorModelRotational.cpp
     physics/ChHydraulicCircuit.cpp
     physics/ChHydraulicActuator.cpp
     physics/ChElectromechanicalActuator.cpp
     )
 set(Chrono_physics_actuators_HEADERS
     physics/ChActuator.h
+    physics/ChActuatorModelLinear.h
+    physics/ChActuatorModelRotational.h
     physics/ChActuatorTSDA.h
     physics/ChActuatorRSDA.h
+    physics/actuator_models/ChActuatorModel.h
+    physics/actuator_models/ChElectricActuatorModel.h
+    physics/actuator_models/ChTabulatedActuatorModel.h
     physics/ChHydraulicCircuit.h
     physics/ChHydraulicActuator.h
     physics/ChElectromechanicalActuator.h

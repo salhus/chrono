@@ -24,6 +24,7 @@ set(DEMOS
   demo_MBS_external_ODE
   demo_MBS_external_DAE  
   demo_MBS_hydraulic_actuator
+  demo_MBS_actuator_models
   demo_MBS_hydraulic_crane
   demo_MBS_hydraulic_crane_cosim
   demo_MBS_custom_collision

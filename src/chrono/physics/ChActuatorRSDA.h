@@ -26,10 +26,10 @@ namespace chrono {
 
 /// RSDA rotational actuator.
 /// The actuator force includes elastic and damping components, a constant actuation torque, and a component modulated by the input function:
-/// T = t0 + t * u(time) + k * (a = a0) + c * ad
+/// T = t0 + t * u(time) - k * (a - a0) - c * ad
 class ChActuatorRSDA : public ChRotationalActuator {
   public:
-    ChActuatorRSDA() : m_k(0), m_r(0), m_t(0), m_rest_angle(0) {}
+    ChActuatorRSDA() : m_k(0), m_r(0), m_t(0), m_t0(0), m_rest_angle(0) {}
     ~ChActuatorRSDA() {}
 
     /// Set spring coefficient (default: 0).
@@ -47,12 +47,12 @@ class ChActuatorRSDA : public ChRotationalActuator {
     void SetBaseTorque(double t) { m_t = t; }
 
     /// Set spring rest angle (in radians).
-    void SetRestAngle(double rest_angle);
+    void SetRestAngle(double rest_angle) { m_rest_angle = rest_angle; }
 
     /// Get the actuator torque at the specified time.
-    virtual double GetActuatorTorque(double time) {
+    virtual double GetActuatorTorque(double time) override {
         double U = GetInput(time);
-        auto torque = m_t * U - m_k * (a - m_rest_angle) - m_r * ad;
+        auto torque = m_t0 + m_t * U - m_k * (a - m_rest_angle) - m_r * ad;
         return torque;
     }
 
