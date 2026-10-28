@@ -8,6 +8,7 @@ SET(TESTS
     utest_CH_prismatic_spring
     utest_CH_actuators
     utest_CH_actuator_models
+    utest_CH_actuator_model_bindings
 )
 
 if(CH_ENABLE_MODULE_PARDISO_MKL)
