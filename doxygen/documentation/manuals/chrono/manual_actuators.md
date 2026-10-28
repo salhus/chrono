@@ -38,7 +38,8 @@ The model sees output-side kinematics, not motor-shaft kinematics:
 coordinates are supplied with `SetActuatorLength()` or `SetActuatorAngle()`.
 Supply an **unwrapped** angle in stand-alone use. Attached rotational actuators track accumulated
 turns across the principal-angle boundary; updates must resolve those turns (do not skip complete
-revolutions between kinematic updates).
+revolutions between kinematic updates). In particular, keep the magnitude of angular change between
+successive updates **below \f$\pi\f$ radians** so the unwrapping direction is unambiguous.
 
 Positive mechanical power \f$P_m=ev\f$ means delivery to the mechanical system; negative power
 means mechanical absorption. Positive electrical power means drawing from the electrical bus;
