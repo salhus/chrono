@@ -27,10 +27,14 @@
 namespace chrono {
 namespace actuator_models {
 
-/// Stateless actuator model consuming user-supplied torque-speed, efficiency, and friction tables.
+/// Stateless actuator model consuming user-supplied output-side effort-speed, efficiency, and friction tables.
+/// Axes and effort magnitudes are nonnegative SI quantities; commands specify a fraction of the effort envelope.
+/// Tables use linear/bilinear interpolation and clamp outside their axes. Data must describe a passive actuator.
 class ChTabulatedActuatorModel : public ChActuatorModel {
   public:
     /// Efficiency tables are row-major: speed index first, then effort index.
+    /// Each axis is nonempty, finite, and strictly increasing. Efficiencies lie in (0, 1].
+    /// The optional positive, finite smoothing speed has units m/s or rad/s; existing constructors remain valid.
     ChTabulatedActuatorModel(std::vector<double> speed_axis,
                              std::vector<double> max_effort,
                              std::vector<double> efficiency_speed_axis,
@@ -38,7 +42,8 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
                              std::vector<double> motoring_efficiency,
                              std::vector<double> generating_efficiency,
                              std::vector<double> friction_speed_axis,
-                             std::vector<double> friction_effort)
+                             std::vector<double> friction_effort,
+                             double friction_smoothing_speed = 1e-3)
         : m_speed_axis(std::move(speed_axis)),
           m_max_effort(std::move(max_effort)),
           m_efficiency_speed_axis(std::move(efficiency_speed_axis)),
@@ -46,7 +51,9 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
           m_motoring_efficiency(std::move(motoring_efficiency)),
           m_generating_efficiency(std::move(generating_efficiency)),
           m_friction_speed_axis(std::move(friction_speed_axis)),
-          m_friction_effort(std::move(friction_effort)) {
+          m_friction_effort(std::move(friction_effort)),
+          m_friction_smoothing_speed(friction_smoothing_speed) {
+        SetFrictionSmoothingSpeed(friction_smoothing_speed);
         ValidateAxis(m_speed_axis, m_max_effort.size(), "speed");
         ValidateAxis(m_efficiency_speed_axis, m_efficiency_speed_axis.size(), "efficiency speed");
         ValidateAxis(m_efficiency_effort_axis, m_efficiency_effort_axis.size(), "efficiency effort");
@@ -72,29 +79,44 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
         }
     }
 
+    /// Set the velocity scale for the smooth Coulomb sign; changing it does not change table magnitudes.
+    void SetFrictionSmoothingSpeed(double speed) {
+        if (!std::isfinite(speed) || speed <= 0)
+            throw std::invalid_argument("Friction smoothing speed must be positive and finite");
+        m_friction_smoothing_speed = speed;
+    }
+
+    /// Get the friction smoothing speed [m/s or rad/s].
+    double GetFrictionSmoothingSpeed() const { return m_friction_smoothing_speed; }
+
+    /// Apply the signed command fraction of the speed envelope, then subtract smooth output-side friction.
     double ComputeEffort(const ActuatorCommand& command, const ActuatorState& state) const override {
         double speed = std::abs(state.velocity);
         double envelope = Interpolate1D(m_speed_axis, m_max_effort, speed);
         double commanded_effort = command.enabled ? std::clamp(command.value, -1.0, 1.0) * envelope : 0;
         double friction = Interpolate1D(m_friction_speed_axis, m_friction_effort, speed);
-        double smooth_sign = state.velocity == 0 ? 0 : std::tanh(state.velocity / 1e-3);
+        double smooth_sign = std::tanh(state.velocity / m_friction_smoothing_speed);
         return commanded_effort - friction * smooth_sign;
     }
 
-    /// Return the bilinearly interpolated efficiency for the current command quadrant.
+    /// Return bilinear efficiency using the sign of final mechanical power to select the quadrant.
     double GetEfficiency(const ActuatorCommand& command, const ActuatorState& state) const {
         double effort = ComputeEffort(command, state);
         const auto& map = effort * state.velocity >= 0 ? m_motoring_efficiency : m_generating_efficiency;
         return Interpolate2D(m_efficiency_speed_axis, m_efficiency_effort_axis, map, std::abs(state.velocity), std::abs(effort));
     }
 
+    /// Estimate bus power as P_mech/eta for motoring or eta*P_mech for generating.
+    /// Maps must include all device losses; no winding-current or separate copper-loss estimate is available.
     ActuatorTelemetry ComputeTelemetry(const ActuatorCommand& command, const ActuatorState& state) const override {
         ActuatorTelemetry telemetry;
         telemetry.applied_effort = ComputeEffort(command, state);
         telemetry.mechanical_power = telemetry.applied_effort * state.velocity;
         telemetry.efficiency = GetEfficiency(command, state);
+        telemetry.electrical_power = telemetry.mechanical_power >= 0 ? telemetry.mechanical_power / telemetry.efficiency : telemetry.mechanical_power * telemetry.efficiency;
+        if (telemetry.mechanical_power == 0)
+            telemetry.efficiency = 0;
         telemetry.command_saturated = command.enabled && std::abs(command.value) > 1;
-        telemetry.effort_saturated = telemetry.command_saturated;
         return telemetry;
     }
 
@@ -168,6 +190,7 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
     std::vector<double> m_generating_efficiency;
     std::vector<double> m_friction_speed_axis;
     std::vector<double> m_friction_effort;
+    double m_friction_smoothing_speed;
 };
 
 }  // namespace actuator_models

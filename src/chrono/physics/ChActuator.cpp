@@ -20,7 +20,7 @@ namespace chrono {
 ChActuator::ChActuator() : is_attached(false), calculate_consistent_IC(false) {}
 
 double ChActuator::GetInput(double t) const {
-    return ChClamp(ref_fun->GetVal(t), -1.0, +1.0);
+    return ref_fun ? ChClamp(ref_fun->GetVal(t), -1.0, +1.0) : 0;
 }
 
 void ChActuator::IntLoadResidual_F(const unsigned int off, ChVectorDynamic<>& R, const double c) {
@@ -63,7 +63,7 @@ void ChActuator::LoadKRMMatrices(double Kfactor, double Rfactor, double Mfactor)
 
 // -----------------------------------------------------------------------------
 
-ChLinearActuator::ChLinearActuator() : ChActuator() {}
+ChLinearActuator::ChLinearActuator() : ChActuator(), s_0(0), s(0), sd(0), F0(0) {}
 
 void ChLinearActuator::SetActuatorInitialLength(double len) {
     s_0 = len;
@@ -108,6 +108,8 @@ void ChLinearActuator::Connect(std::shared_ptr<ChBody> body1, std::shared_ptr<Ch
     }
 
     s_0 = (m_aloc1 - m_aloc2).Length();
+    s = s_0;
+    sd = 0;
 
     // Resize temporary vector of generalized body forces
     m_Qforce.resize(12);
@@ -122,9 +124,6 @@ void ChLinearActuator::Connect(std::shared_ptr<ChBody> body1, std::shared_ptr<Ch
 }
 
 void ChLinearActuator::Update(double time, UpdateFlags update_flags) {
-    // Update the dynamics of this actuator (if any)
-    ChExternalDynamicsODE::Update(time, update_flags);
-
     // If the actuator is attached to bodies
     // - update its length and rate from the body states
     // - apply the generated force to the two bodies
@@ -139,7 +138,13 @@ void ChLinearActuator::Update(double time, UpdateFlags update_flags) {
 
         s = (m_aloc1 - m_aloc2).Length();
         sd = Vdot(dir, avel1 - avel2);
+    }
 
+    // Internal dynamics must use the current connected-body kinematics.
+    ChExternalDynamicsODE::Update(time, update_flags);
+
+    if (is_attached) {
+        ChVector3d dir = (m_aloc1 - m_aloc2).GetNormalized();
         ////std::cout << "time = " << time << "    s=" << s << "   sd=" << sd << std::endl;
 
         // Actuator force
@@ -162,7 +167,7 @@ void ChLinearActuator::Update(double time, UpdateFlags update_flags) {
 
 // -----------------------------------------------------------------------------
 
-ChRotationalActuator::ChRotationalActuator() : ChActuator(), m_turns(0), m_last_angle(0) {}
+ChRotationalActuator::ChRotationalActuator() : ChActuator(), a_0(0), a(0), ad(0), T0(0), m_turns(0), m_last_angle(0) {}
 
 void ChRotationalActuator::SetActuatorInitialAngle(double angle) {
     a_0 = angle;
@@ -199,10 +204,7 @@ void ChRotationalActuator::CalcAngle() {
     double c = Vdot(f1, f2);
 
     // Get angle (in [-pi , +pi])
-    a = std::asin(s);
-    if (c < 0) {
-        a = (s >= 0) ? CH_PI - a : -CH_PI - a;
-    }
+    a = std::atan2(s, c);
 
     // Get angle rate of change
     m_axis = rot1.GetAxisZ();
@@ -256,6 +258,7 @@ void ChRotationalActuator::Connect(std::shared_ptr<ChBody> body1, std::shared_pt
     // Calculate initial angle
     CalcAngle();
     a_0 = a;
+    m_turns = 0;
     m_last_angle = a;
 
     // Resize temporary vector of generalized body forces
@@ -271,9 +274,6 @@ void ChRotationalActuator::Connect(std::shared_ptr<ChBody> body1, std::shared_pt
 }
 
 void ChRotationalActuator::Update(double time, UpdateFlags update_flags) {
-    // Update the dynamics of this actuator (if any)
-    ChExternalDynamicsODE::Update(time, update_flags);
-
     // If the actuator is attached to bodies
     // - update its angle and rate from the body states
     // - apply the generated torque to the two bodies
@@ -281,9 +281,13 @@ void ChRotationalActuator::Update(double time, UpdateFlags update_flags) {
         // Calculate current angle and angle rate
         CalcAngle();
         AdjustAngle();
+    }
 
+    // Internal dynamics must use the current connected-body kinematics.
+    ChExternalDynamicsODE::Update(time, update_flags);
+
+    if (is_attached) {
         // Calculate torque along actuator axis
-        double angle = CH_2PI * m_turns + a;
         auto t = GetActuatorTorque(time);
         ChVector3d torque = t * m_axis;
 

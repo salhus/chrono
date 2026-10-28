@@ -1,3 +1,5 @@
+build_demos("demo_MBS_actuator_models" "Chrono_core")
+
 if(NOT CH_ENABLE_MODULE_IRRLICHT AND NOT CH_ENABLE_MODULE_VSG)
     return()
 endif()
@@ -24,7 +26,6 @@ set(DEMOS
   demo_MBS_external_ODE
   demo_MBS_external_DAE  
   demo_MBS_hydraulic_actuator
-  demo_MBS_actuator_models
   demo_MBS_hydraulic_crane
   demo_MBS_hydraulic_crane_cosim
   demo_MBS_custom_collision

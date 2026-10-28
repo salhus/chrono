@@ -5,6 +5,7 @@ Change Log
 ==========
 
 - [Unreleased (development branch)](#unreleased-development-branch)
+  - [\[Added\] Engine-independent actuator models](#added-engine-independent-actuator-models)
   - [\[Changed\] Chrono::Sensor appearance of shapes with no visual material](#changed-chronosensor-appearance-of-shapes-with-no-visual-material)
 - [Release 10.0.0 (2026-03-27)](#release-1000-2026-03-27)
   - [\[Changed\] Python support in conda packages](#changed-python-support-in-conda-packages)
@@ -129,6 +130,15 @@ Change Log
 - [Release 4.0.0 (2019-02-22)](#release-400-2019-02-22)
 
 # Unreleased (development branch) 
+
+## [Added] Engine-independent actuator models
+
+Added standard-library-only electric and measured-table actuator models, with linear and rotational
+Chrono core bindings, optional integrated current dynamics, passive disabled-command behavior, and
+state-aware power/loss telemetry. See the [actuator models manual](https://api.projectchrono.org/manual_actuators.html)
+for conventions, parameters, energy balance, examples, and developer tests.
+The electric `max_effort` limits electromagnetic effort through a conservative current cap before
+passive friction; it does not clip the final force/torque or model hardware safety protection.
 
 ## [Changed] Chrono::Sensor appearance of shapes with no visual material
 

@@ -41,6 +41,7 @@ class ChApi ChActuator : public ChExternalDynamicsODE {
 
     /// Get current actuator input.
     /// Evaluate the provided actuator input function and clamp return value to [-1,1].
+    /// Return zero if no input function is set.
     double GetInput(double t) const;
 
     /// Initialize the actuator stand-alone.
@@ -187,6 +188,9 @@ class ChApi ChRotationalActuator : public ChActuator {
     /// Set the current actuator angle and rate of change.
     /// Can be used in a co-simulation interface.
     void SetActuatorAngle(double angle, double ang_vel);
+
+    /// Get the continuous actuator angle, including accumulated revolutions for an attached actuator [rad].
+    double GetActuatorAngle() const { return CH_2PI * m_turns + a; }
 
     /// Get the current actuator torque.
     /// Can be used in a co-simulation interface.
