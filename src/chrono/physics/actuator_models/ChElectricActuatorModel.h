@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "ChActuatorModel.h"
+#include "ChActuatorSmoothing.h"
 
 namespace chrono {
 namespace actuator_models {
@@ -51,7 +52,7 @@ class ChElectricActuatorModel : public ChActuatorModel {
         double viscous_friction = 0;                ///< Output viscous coefficient [N*m*s/rad or N*s/m], nonnegative.
         double friction_smoothing_speed = 1e-3;     ///< Positive, finite Coulomb smoothing speed [rad/s or m/s].
         bool allow_inconsistent_constants = false;  ///< Explicitly waive the relative 1e-6 Kt/Ke consistency check.
-        double quadrant_smoothing = 1e-3;           ///< Positive, finite electromagnetic-power crossover width [W].
+        double loss_smoothing_speed = 1e-2;         ///< Positive, finite transmission crossover speed [rad/s or m/s].
     };
 
     /// Construct with the default SI parameters.
@@ -145,6 +146,7 @@ class ChElectricActuatorModel : public ChActuatorModel {
         telemetry.electrical_power = voltage * current;
         telemetry.current = current;
         telemetry.copper_loss = current * current * m_parameters.resistance;
+        telemetry.gear_loss = GearLoss(current, state.velocity) * state.velocity;
         if (telemetry.mechanical_power > 0 && telemetry.electrical_power > 0)
             telemetry.efficiency = std::clamp(telemetry.mechanical_power / telemetry.electrical_power, 0.0, 1.0);
         else if (telemetry.mechanical_power < 0 && telemetry.electrical_power < 0)
@@ -166,8 +168,8 @@ class ChElectricActuatorModel : public ChActuatorModel {
             !(m_parameters.motoring_efficiency > 0 && m_parameters.motoring_efficiency <= 1) ||
             !(m_parameters.generating_efficiency > 0 && m_parameters.generating_efficiency <= 1))
             throw std::invalid_argument("Invalid electric actuator model parameters");
-        if (!std::isfinite(m_parameters.quadrant_smoothing) || m_parameters.quadrant_smoothing <= 0)
-            throw std::invalid_argument("Quadrant smoothing power must be positive and finite");
+        if (!std::isfinite(m_parameters.loss_smoothing_speed) || m_parameters.loss_smoothing_speed <= 0)
+            throw std::invalid_argument("Loss smoothing speed must be positive and finite");
         if (!m_parameters.allow_inconsistent_constants &&
             std::abs(m_parameters.torque_constant - m_parameters.back_emf_constant) > 1e-6 * std::max(m_parameters.torque_constant, m_parameters.back_emf_constant))
             throw std::invalid_argument("SI torque and back-EMF constants must match (or explicitly opt out)");
@@ -192,15 +194,14 @@ class ChElectricActuatorModel : public ChActuatorModel {
         return std::clamp(requested_current, -CurrentLimit(), CurrentLimit());
     }
 
+    double GearLoss(double current, double output_speed) const {
+        return ActuatorTransmissionLoss(m_parameters.gear_ratio * m_parameters.torque_constant * current, output_speed,
+                                        m_parameters.loss_smoothing_speed, 1 - m_parameters.motoring_efficiency,
+                                        1 / m_parameters.generating_efficiency - 1);
+    }
+
     double EffortFromCurrent(double current, double output_speed) const {
-        double motor_effort = m_parameters.torque_constant * current;
-        double motor_speed = m_parameters.gear_ratio * output_speed;
-        double power = motor_effort * motor_speed;
-        // Blend through unity at zero power: a direct blend between the two efficiencies can create energy.
-        double q = std::min(std::abs(power) / m_parameters.quadrant_smoothing, 1.0);
-        double blend = q * q * (3 - 2 * q);
-        double factor = power >= 0 ? 1 + (m_parameters.motoring_efficiency - 1) * blend : 1 + (1 / m_parameters.generating_efficiency - 1) * blend;
-        double requested_effort = motor_effort * m_parameters.gear_ratio * factor;
+        double requested_effort = m_parameters.gear_ratio * m_parameters.torque_constant * current - GearLoss(current, output_speed);
         requested_effort -= m_parameters.coulomb_friction * std::tanh(output_speed / m_parameters.friction_smoothing_speed);
         requested_effort -= m_parameters.viscous_friction * output_speed;
         return requested_effort;
