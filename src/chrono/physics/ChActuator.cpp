@@ -205,10 +205,7 @@ void ChRotationalActuator::CalcAngle() {
     double c = Vdot(f1, f2);
 
     // Get angle (in [-pi , +pi])
-    a = std::asin(s);
-    if (c < 0) {
-        a = (s >= 0) ? CH_PI - a : -CH_PI - a;
-    }
+    a = std::atan2(s, c);
 
     // Get angle rate of change
     m_axis = rot1.GetAxisZ();
