@@ -20,8 +20,7 @@
 
 namespace chrono {
 
-ChActuatorModelRotational::ChActuatorModelRotational(std::shared_ptr<const actuator_models::ChActuatorModel> model)
-    : m_model(std::move(model)) {
+ChActuatorModelRotational::ChActuatorModelRotational(std::shared_ptr<const actuator_models::ChActuatorModel> model) : m_model(std::move(model)) {
     if (!m_model)
         throw std::invalid_argument("Rotational actuator model must not be null");
 }
@@ -46,8 +45,7 @@ actuator_models::ActuatorTelemetry ChActuatorModelRotational::GetTelemetry(doubl
     std::vector<double> states(static_cast<std::size_t>(GetStates().size()));
     for (std::size_t i = 0; i < states.size(); ++i)
         states[i] = GetStates()(static_cast<Eigen::Index>(i));
-    return m_model->ComputeTelemetryFromStates(states, {GetInput(time), m_enabled},
-                                             {GetActuatorAngle() - a_0, ad, time});
+    return m_model->ComputeTelemetryFromStates(states, {GetInput(time), m_enabled}, {GetActuatorAngle() - a_0, ad, time});
 }
 
 bool ChActuatorModelRotational::IsStiff() const {
@@ -85,10 +83,7 @@ void ChActuatorModelRotational::CalculateRHS(double time, const ChVectorDynamic<
         rhs(static_cast<Eigen::Index>(i)) = derivatives[i];
 }
 
-bool ChActuatorModelRotational::CalculateJac(double time,
-                                           const ChVectorDynamic<>& y,
-                                           const ChVectorDynamic<>&,
-                                           ChMatrixDynamic<>& J) {
+bool ChActuatorModelRotational::CalculateJac(double time, const ChVectorDynamic<>& y, const ChVectorDynamic<>&, ChMatrixDynamic<>& J) {
     if (static_cast<std::size_t>(y.size()) != m_model->GetNumStates())
         throw std::runtime_error("Rotational actuator model received invalid state dimensions");
     std::vector<double> states(static_cast<std::size_t>(y.size()));

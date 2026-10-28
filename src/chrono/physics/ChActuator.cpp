@@ -167,8 +167,7 @@ void ChLinearActuator::Update(double time, UpdateFlags update_flags) {
 
 // -----------------------------------------------------------------------------
 
-ChRotationalActuator::ChRotationalActuator()
-    : ChActuator(), a_0(0), a(0), ad(0), T0(0), m_turns(0), m_last_angle(0) {}
+ChRotationalActuator::ChRotationalActuator() : ChActuator(), a_0(0), a(0), ad(0), T0(0), m_turns(0), m_last_angle(0) {}
 
 void ChRotationalActuator::SetActuatorInitialAngle(double angle) {
     a_0 = angle;

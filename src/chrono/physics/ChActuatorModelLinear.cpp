@@ -20,8 +20,7 @@
 
 namespace chrono {
 
-ChActuatorModelLinear::ChActuatorModelLinear(std::shared_ptr<const actuator_models::ChActuatorModel> model)
-    : m_model(std::move(model)) {
+ChActuatorModelLinear::ChActuatorModelLinear(std::shared_ptr<const actuator_models::ChActuatorModel> model) : m_model(std::move(model)) {
     if (!m_model)
         throw std::invalid_argument("Linear actuator model must not be null");
 }
@@ -84,10 +83,7 @@ void ChActuatorModelLinear::CalculateRHS(double time, const ChVectorDynamic<>& y
         rhs(static_cast<Eigen::Index>(i)) = derivatives[i];
 }
 
-bool ChActuatorModelLinear::CalculateJac(double time,
-                                       const ChVectorDynamic<>& y,
-                                       const ChVectorDynamic<>&,
-                                       ChMatrixDynamic<>& J) {
+bool ChActuatorModelLinear::CalculateJac(double time, const ChVectorDynamic<>& y, const ChVectorDynamic<>&, ChMatrixDynamic<>& J) {
     if (static_cast<std::size_t>(y.size()) != m_model->GetNumStates())
         throw std::runtime_error("Linear actuator model received invalid state dimensions");
     std::vector<double> states(static_cast<std::size_t>(y.size()));

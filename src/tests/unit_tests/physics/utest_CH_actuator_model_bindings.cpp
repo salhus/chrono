@@ -35,20 +35,14 @@ class PositionModel : public ChActuatorModel {
 
 class CommandModel : public ChActuatorModel {
   public:
-    double ComputeEffort(const ActuatorCommand& command, const ActuatorState&) const override {
-        return command.enabled ? command.value : -2;
-    }
+    double ComputeEffort(const ActuatorCommand& command, const ActuatorState&) const override { return command.enabled ? command.value : -2; }
 };
 
 class InspectModel : public PositionModel {
   public:
     std::size_t GetNumStates() const override { return 1; }
 
-    void CalculateRHS(double,
-                      const std::vector<double>&,
-                      const ActuatorCommand& command,
-                      const ActuatorState& state,
-                      std::vector<double>& rhs) const override {
+    void CalculateRHS(double, const std::vector<double>&, const ActuatorCommand& command, const ActuatorState& state, std::vector<double>& rhs) const override {
         rhs = {state.position + state.velocity + (command.enabled ? command.value : -1)};
     }
 
@@ -67,25 +61,14 @@ class MalformedModel : public InspectModel {
     enum class Output { INITIAL, RHS, JAC_ROWS, JAC_COLUMNS };
     explicit MalformedModel(Output output) : m_output(output) {}
 
-    void SetInitialConditions(std::vector<double>& states) const override {
-        states.assign(m_output == Output::INITIAL ? 2 : 1, 0);
-    }
+    void SetInitialConditions(std::vector<double>& states) const override { states.assign(m_output == Output::INITIAL ? 2 : 1, 0); }
 
-    void CalculateRHS(double,
-                      const std::vector<double>&,
-                      const ActuatorCommand&,
-                      const ActuatorState&,
-                      std::vector<double>& rhs) const override {
+    void CalculateRHS(double, const std::vector<double>&, const ActuatorCommand&, const ActuatorState&, std::vector<double>& rhs) const override {
         rhs.assign(m_output == Output::RHS ? 2 : 1, 0);
     }
 
-    bool CalculateJacobian(double,
-                           const std::vector<double>&,
-                           const ActuatorCommand&,
-                           const ActuatorState&,
-                           std::vector<std::vector<double>>& jacobian) const override {
-        jacobian.assign(m_output == Output::JAC_ROWS ? 2 : 1,
-                        std::vector<double>(m_output == Output::JAC_COLUMNS ? 2 : 1, 0));
+    bool CalculateJacobian(double, const std::vector<double>&, const ActuatorCommand&, const ActuatorState&, std::vector<std::vector<double>>& jacobian) const override {
+        jacobian.assign(m_output == Output::JAC_ROWS ? 2 : 1, std::vector<double>(m_output == Output::JAC_COLUMNS ? 2 : 1, 0));
         return true;
     }
 
@@ -138,8 +121,7 @@ void CheckCommandAndJacobian(Binding& actuator) {
 
 template <class Binding>
 void CheckMalformedOutputs() {
-    for (auto output : {MalformedModel::Output::INITIAL, MalformedModel::Output::RHS,
-                        MalformedModel::Output::JAC_ROWS, MalformedModel::Output::JAC_COLUMNS}) {
+    for (auto output : {MalformedModel::Output::INITIAL, MalformedModel::Output::RHS, MalformedModel::Output::JAC_ROWS, MalformedModel::Output::JAC_COLUMNS}) {
         Binding actuator(std::make_shared<MalformedModel>(output));
         // Initialize with valid storage before testing the malformed model callbacks directly.
         if (output != MalformedModel::Output::INITIAL)

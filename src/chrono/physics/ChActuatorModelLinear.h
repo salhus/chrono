@@ -61,14 +61,11 @@ class ChApi ChActuatorModelLinear : public ChLinearActuator {
     /// Evaluate internal-state derivatives with the current actuator kinematics and command.
     virtual void CalculateRHS(double time, const ChVectorDynamic<>& y, ChVectorDynamic<>& rhs) override;
     /// Resize and load a validated square model Jacobian, or return false to request finite differences.
-    virtual bool CalculateJac(double time,
-                              const ChVectorDynamic<>& y,
-                              const ChVectorDynamic<>& rhs,
-                              ChMatrixDynamic<>& J) override;
+    virtual bool CalculateJac(double time, const ChVectorDynamic<>& y, const ChVectorDynamic<>& rhs, ChMatrixDynamic<>& J) override;
 
   private:
     std::shared_ptr<const actuator_models::ChActuatorModel> m_model;  ///< shared immutable model
-    bool m_enabled = true;                                         ///< model command enable flag
+    bool m_enabled = true;                                            ///< model command enable flag
 };
 
 }  // namespace chrono
