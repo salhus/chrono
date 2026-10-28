@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "ChActuatorModel.h"
+#include "ChActuatorSmoothing.h"
 
 namespace chrono {
 namespace actuator_models {
@@ -43,7 +44,8 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
                              std::vector<double> generating_efficiency,
                              std::vector<double> friction_speed_axis,
                              std::vector<double> friction_effort,
-                             double friction_smoothing_speed = 1e-3)
+                             double friction_smoothing_speed = 1e-3,
+                             double loss_smoothing_speed = 1e-2)
         : m_speed_axis(std::move(speed_axis)),
           m_max_effort(std::move(max_effort)),
           m_efficiency_speed_axis(std::move(efficiency_speed_axis)),
@@ -52,8 +54,10 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
           m_generating_efficiency(std::move(generating_efficiency)),
           m_friction_speed_axis(std::move(friction_speed_axis)),
           m_friction_effort(std::move(friction_effort)),
-          m_friction_smoothing_speed(friction_smoothing_speed) {
+          m_friction_smoothing_speed(friction_smoothing_speed),
+          m_loss_smoothing_speed(loss_smoothing_speed) {
         SetFrictionSmoothingSpeed(friction_smoothing_speed);
+        SetLossSmoothingSpeed(loss_smoothing_speed);
         ValidateAxis(m_speed_axis, m_max_effort.size(), "speed");
         ValidateAxis(m_efficiency_speed_axis, m_efficiency_speed_axis.size(), "efficiency speed");
         ValidateAxis(m_efficiency_effort_axis, m_efficiency_effort_axis.size(), "efficiency effort");
@@ -89,6 +93,17 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
     /// Get the friction smoothing speed [m/s or rad/s].
     double GetFrictionSmoothingSpeed() const { return m_friction_smoothing_speed; }
 
+    /// Set the positive, finite conversion-loss crossover speed [m/s or rad/s].
+    /// This regularizes inferred input power, not the measured delivered-effort envelope.
+    void SetLossSmoothingSpeed(double speed) {
+        if (!std::isfinite(speed) || speed <= 0)
+            throw std::invalid_argument("Loss smoothing speed must be positive and finite");
+        m_loss_smoothing_speed = speed;
+    }
+
+    /// Get the conversion-loss crossover speed [m/s or rad/s].
+    double GetLossSmoothingSpeed() const { return m_loss_smoothing_speed; }
+
     /// Apply the signed command fraction of the speed envelope, then subtract smooth output-side friction.
     double ComputeEffort(const ActuatorCommand& command, const ActuatorState& state) const override {
         double speed = std::abs(state.velocity);
@@ -99,23 +114,29 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
         return commanded_effort - friction * smooth_sign;
     }
 
-    /// Return bilinear efficiency using the sign of final mechanical power to select the quadrant.
+    /// Return directional mechanical/input or input/mechanical efficiency, with a passive speed crossover.
+    /// Return the lossless limiting ratio 1 at zero power (telemetry instead reports 0 for undefined ratios).
+    /// Map branches are exact outside the crossover band; table interpolation remains piecewise bilinear.
     double GetEfficiency(const ActuatorCommand& command, const ActuatorState& state) const {
-        double effort = ComputeEffort(command, state);
-        const auto& map = effort * state.velocity >= 0 ? m_motoring_efficiency : m_generating_efficiency;
-        return Interpolate2D(m_efficiency_speed_axis, m_efficiency_effort_axis, map, std::abs(state.velocity), std::abs(effort));
+        auto telemetry = ComputeTelemetry(command, state);
+        return telemetry.mechanical_power == 0 ? 1 : telemetry.efficiency;
     }
 
-    /// Estimate bus power as P_mech/eta for motoring or eta*P_mech for generating.
+    /// Estimate bus power as P_mech/eta for motoring or eta*P_mech for generating outside the crossover band.
     /// Maps must include all device losses; no winding-current or separate copper-loss estimate is available.
     ActuatorTelemetry ComputeTelemetry(const ActuatorCommand& command, const ActuatorState& state) const override {
         ActuatorTelemetry telemetry;
         telemetry.applied_effort = ComputeEffort(command, state);
         telemetry.mechanical_power = telemetry.applied_effort * state.velocity;
-        telemetry.efficiency = GetEfficiency(command, state);
-        telemetry.electrical_power = telemetry.mechanical_power >= 0 ? telemetry.mechanical_power / telemetry.efficiency : telemetry.mechanical_power * telemetry.efficiency;
-        if (telemetry.mechanical_power == 0)
-            telemetry.efficiency = 0;
+        double motoring = Interpolate2D(m_efficiency_speed_axis, m_efficiency_effort_axis, m_motoring_efficiency, std::abs(state.velocity), std::abs(telemetry.applied_effort));
+        double generating = Interpolate2D(m_efficiency_speed_axis, m_efficiency_effort_axis, m_generating_efficiency, std::abs(state.velocity), std::abs(telemetry.applied_effort));
+        // The envelope is delivered effort: infer upstream effort by ADDING passive conversion loss.
+        telemetry.gear_loss = ActuatorTransmissionLoss(telemetry.applied_effort, state.velocity, m_loss_smoothing_speed, 1 / motoring - 1, 1 - generating) * state.velocity;
+        telemetry.electrical_power = telemetry.mechanical_power + telemetry.gear_loss;
+        if (telemetry.mechanical_power > 0 && telemetry.electrical_power > 0)
+            telemetry.efficiency = std::clamp(telemetry.mechanical_power / telemetry.electrical_power, 0.0, 1.0);
+        else if (telemetry.mechanical_power < 0 && telemetry.electrical_power < 0)
+            telemetry.efficiency = std::clamp(telemetry.electrical_power / telemetry.mechanical_power, 0.0, 1.0);
         telemetry.command_saturated = command.enabled && std::abs(command.value) > 1;
         return telemetry;
     }
@@ -191,6 +212,7 @@ class ChTabulatedActuatorModel : public ChActuatorModel {
     std::vector<double> m_friction_speed_axis;
     std::vector<double> m_friction_effort;
     double m_friction_smoothing_speed;
+    double m_loss_smoothing_speed;
 };
 
 }  // namespace actuator_models
