@@ -53,6 +53,7 @@ struct ActuatorTelemetry {
     bool voltage_saturated = false;  ///< Requested enabled voltage exceeded the bus voltage.
     double current = 0;              ///< Winding current [A]; zero if not provided by the model.
     double copper_loss = 0;          ///< Winding Joule loss i^2 R [W]; zero if not provided.
+    double gear_loss = 0;            ///< Passive transmission loss [W], nonnegative; zero if not provided.
 };
 
 /// Engine-independent actuator model interface.

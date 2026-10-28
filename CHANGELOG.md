@@ -137,8 +137,32 @@ Added standard-library-only electric and measured-table actuator models, with li
 Chrono core bindings, optional integrated current dynamics, passive disabled-command behavior, and
 state-aware power/loss telemetry. See the [actuator models manual](https://api.projectchrono.org/manual_actuators.html)
 for conventions, parameters, energy balance, examples, and developer tests.
-The electric `max_effort` limits electromagnetic effort through a conservative current cap before
-passive friction; it does not clip the final force/torque or model hardware safety protection.
+Transmission losses now use a passive, compact speed crossover with a rigorous bounded velocity
+slope (dimensionless bound 3) and exact directional efficiencies outside the crossover.
+The crossover multiplies two cubic ramps using only the active quadrant's loss coefficient, with
+no central deadzone or coefficient averaging. Loss never exceeds that quadrant's far-branch
+magnitude, preventing asymmetric efficiencies from reversing motoring torque inside the band.
+The coefficient itself is continuously differentiable through zero speed; the slope bound follows
+from the cubic-product derivative. Regression sweeps cover asymmetric loss coefficients.
+Replace the removed electric `Parameters::quadrant_smoothing` (power units) with
+`Parameters::loss_smoothing_speed` (output rad/s or m/s, default `1e-2`); there is no universal
+conversion between the two scales. `Parameters` and existing model/binding names are unchanged.
+Electric `max_effort` now rates delivered machine-plus-transmission effort before external friction,
+using speed- and current-direction-dependent current caps: motoring is no longer conservatively
+derated, and braking has the same output rating. Final force/torque is not independently clipped.
+The idealized limiter retains bus power `V*i` and can dissipate additional limiter power; it is not
+hardware safety protection or exact moving-bound complementarity enforcement.
+`GetStallEffort()` remains the regularized zero-speed limit, not a datasheet far-motoring rating.
+Tabulated models preserve the delivered effort envelope and estimate input power by adding passive
+conversion loss; `gear_loss` reports aggregate map loss, not an extra loss to add to measured maps.
+Their constructor adds a trailing optional `loss_smoothing_speed=1e-2`, with
+`GetLossSmoothingSpeed()`/`SetLossSmoothingSpeed()`; existing constructor calls remain valid.
+Tabulated `GetEfficiency()` now returns the limiting crossover value 1 at zero mechanical power;
+`ComputeTelemetry().efficiency` retains its zero-power value 0.
+The electric current Jacobian uses a strictly outward voltage-residual clamp test, so equilibrium
+exactly on a current bound retains `-R/L`, rather than being incorrectly treated as a zero row.
+The manual derives the loss law, static-friction indeterminacy, SI constant consistency, four-quadrant
+power balance (including magnetic storage and limiter dissipation), and worked demo checks.
 
 ## [Changed] Chrono::Sensor appearance of shapes with no visual material
 

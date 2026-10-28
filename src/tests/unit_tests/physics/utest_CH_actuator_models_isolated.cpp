@@ -13,10 +13,14 @@
 // =============================================================================
 
 #include "ChActuatorModel.h"
+#include "ChActuatorSmoothing.h"
 #include "ChElectricActuatorModel.h"
 #include "ChTabulatedActuatorModel.h"
 
 int main() {
+    // The shared loss helper is also independently usable with standard-library headers only.
+    if (chrono::actuator_models::ActuatorTransmissionLoss(10, -1, 0.01, 0.1, 0.25) != -2.5)
+        return 4;
     chrono::actuator_models::ChElectricActuatorModel electric_model;
     chrono::actuator_models::ActuatorCommand command;
     chrono::actuator_models::ActuatorState state;

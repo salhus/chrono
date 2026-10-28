@@ -22,18 +22,23 @@
 #include <vector>
 
 #include "ChActuatorModel.h"
+#include "ChActuatorSmoothing.h"
 
 namespace chrono {
 namespace actuator_models {
 
 /// DC-equivalent electric actuator with optional winding-current dynamics and a passive, bidirectional gearbox.
+/// Gear loss is load-dependent friction, C1 in output speed at fixed current; exact efficiency branches apply
+/// outside loss_smoothing_speed. See ActuatorTransmissionLoss and the actuator manual for the law and slope bound.
 /// Positive terminal power is drawn from the bus. Disabling selects zero voltage (shorted winding), not an open circuit.
 /// All evaluations are pure; winding current is owned and integrated by the caller when inductance is positive.
 class ChElectricActuatorModel : public ChActuatorModel {
   public:
     /// SI parameters: output-side velocity/effort and motor-side electrical constants.
     /// An ideal SI motor requires Kt == Ke: electromagnetic power Kt*i*omega must equal Ke*omega*i.
-    /// The explicit opt-out is only for externally converted/non-SI data; it forfeits the SI passivity guarantee.
+    /// Linear machines also require Kt [N/A] == Ke [V*s/m] in SI. Opting out supports independently fitted
+    /// or unconverted non-SI datasheet constants, but forfeits electromechanical energy conservation.
+    /// Prefer converting datasheet constants (for example rpm/V) to SI rather than opting out.
     struct Parameters {
         double resistance = 1;               ///< Winding resistance [ohm], finite and positive.
         double inductance = 0.01;            ///< Winding inductance [H], finite and nonnegative; zero is quasi-static.
@@ -44,14 +49,14 @@ class ChElectricActuatorModel : public ChActuatorModel {
         double motoring_efficiency = 0.9;    ///< Gearbox motoring efficiency in (0, 1].
         double generating_efficiency = 0.8;  ///< Gearbox generating efficiency in (0, 1].
         double max_current = 10;             ///< Symmetric winding-current limit [A], finite and positive.
-        /// Electromagnetic output effort ceiling [N*m or N], positive; passive friction is additional.
-        /// Enforced conservatively by a fixed current cap max_effort*generating_efficiency/(gear_ratio*Kt).
+        /// Peak delivered machine+transmission effort [N*m or N], positive; external friction is additional.
+        /// A speed- and current-direction-dependent current cap enforces this magnitude in both quadrants.
         double max_effort = std::numeric_limits<double>::infinity();
         double coulomb_friction = 0;                ///< Output Coulomb friction magnitude [N*m or N], finite and nonnegative.
         double viscous_friction = 0;                ///< Output viscous coefficient [N*m*s/rad or N*s/m], nonnegative.
         double friction_smoothing_speed = 1e-3;     ///< Positive, finite Coulomb smoothing speed [rad/s or m/s].
         bool allow_inconsistent_constants = false;  ///< Explicitly waive the relative 1e-6 Kt/Ke consistency check.
-        double quadrant_smoothing = 1e-3;           ///< Positive, finite electromagnetic-power crossover width [W].
+        double loss_smoothing_speed = 1e-2;         ///< Positive, finite transmission crossover speed [rad/s or m/s].
     };
 
     /// Construct with the default SI parameters.
@@ -74,7 +79,9 @@ class ChElectricActuatorModel : public ChActuatorModel {
 
     /// Current limiting blocks outward derivatives at either bound; inward derivatives remain unconstrained.
     /// This represents a dissipative ideal current limiter, not an open circuit or a regenerative bus controller.
-    /// An integrator must resolve limit crossings; effort and telemetry project numerical overshoots onto the bounds.
+    /// Bounds depend on speed: an integrator must resolve moving-limit crossings. Effort and telemetry project
+    /// overshoots, but do not reset the stored current or enforce moving-bound complementarity. A shrinking
+    /// bound can overtake the stored state even with exact integration; projected and stored current then differ.
     void CalculateRHS(double, const std::vector<double>& y, const ActuatorCommand& command, const ActuatorState& state, std::vector<double>& rhs) const override {
         rhs.assign(GetNumStates(), 0);
         if (GetNumStates() == 0)
@@ -84,23 +91,22 @@ class ChElectricActuatorModel : public ChActuatorModel {
         double voltage = AppliedVoltage(command, nullptr);
         double motor_speed = m_parameters.gear_ratio * state.velocity;
         double current_rate = (voltage - m_parameters.resistance * current - m_parameters.back_emf_constant * motor_speed) / m_parameters.inductance;
-        double limit = CurrentLimit();
-        if ((current >= limit && current_rate > 0) || (current <= -limit && current_rate < 0))
+        if ((current >= CurrentLimit(state.velocity, 1) && current_rate > 0) || (current <= -CurrentLimit(state.velocity, -1) && current_rate < 0))
             current_rate = 0;
         rhs[0] = current_rate;
     }
 
     /// Exact state derivative on each smooth branch; the active outward clamp has a zero Jacobian row.
-    bool CalculateJacobian(double time,
+    bool CalculateJacobian(double,
                            const std::vector<double>& y,
                            const ActuatorCommand& command,
                            const ActuatorState& state,
                            std::vector<std::vector<double>>& jacobian) const override {
         if (GetNumStates() == 0)
             return false;
-        std::vector<double> rhs;
-        CalculateRHS(time, y, command, state, rhs);
-        bool clamped = std::abs(y.at(0)) >= CurrentLimit() && rhs[0] == 0;
+        double current = y.at(0);
+        double voltage_residual = AppliedVoltage(command, nullptr) - m_parameters.resistance * current - m_parameters.back_emf_constant * m_parameters.gear_ratio * state.velocity;
+        bool clamped = (current >= CurrentLimit(state.velocity, 1) && voltage_residual > 0) || (current <= -CurrentLimit(state.velocity, -1) && voltage_residual < 0);
         jacobian.assign(1, std::vector<double>(1, clamped ? 0 : -m_parameters.resistance / m_parameters.inductance));
         return true;
     }
@@ -112,7 +118,7 @@ class ChElectricActuatorModel : public ChActuatorModel {
     double EffortFromStates(const std::vector<double>& y, const ActuatorCommand& command, const ActuatorState& state) const override {
         if (GetNumStates() == 0)
             return ComputeEffort(command, state);
-        double current = std::clamp(y.at(0), -CurrentLimit(), CurrentLimit());
+        double current = BoundCurrent(y.at(0), state.velocity);
         return EffortFromCurrent(current, state.velocity);
     }
 
@@ -126,8 +132,8 @@ class ChElectricActuatorModel : public ChActuatorModel {
         return GetNumStates() == 0 ? ComputeTelemetry(command, state) : TelemetryFromCurrent(y.at(0), command, state);
     }
 
-    /// Output stall effort at full voltage, limited by both winding resistance and the current bound.
-    /// At zero power the smooth gearbox is lossless; far from crossover its motoring efficiency applies.
+    /// Full-voltage regularized stall effort: limit as output speed approaches zero from above.
+    /// This is not the datasheet motoring-branch rating at speeds outside the loss smoothing band.
     double GetStallEffort() const { return ComputeEffort({1, true}, {}); }
 
     /// Ideal, frictionless output no-load speed at full bus voltage [rad/s or m/s].
@@ -138,20 +144,21 @@ class ChElectricActuatorModel : public ChActuatorModel {
         ActuatorTelemetry telemetry;
         bool voltage_saturated = false;
         double voltage = AppliedVoltage(command, &voltage_saturated);
-        double limit = CurrentLimit();
-        double current = std::clamp(requested_current, -limit, limit);
+        double limit = CurrentLimit(state.velocity, requested_current);
+        double current = BoundCurrent(requested_current, state.velocity);
         telemetry.applied_effort = EffortFromCurrent(current, state.velocity);
         telemetry.mechanical_power = telemetry.applied_effort * state.velocity;
         telemetry.electrical_power = voltage * current;
         telemetry.current = current;
         telemetry.copper_loss = current * current * m_parameters.resistance;
+        telemetry.gear_loss = GearLoss(current, state.velocity) * state.velocity;
         if (telemetry.mechanical_power > 0 && telemetry.electrical_power > 0)
             telemetry.efficiency = std::clamp(telemetry.mechanical_power / telemetry.electrical_power, 0.0, 1.0);
         else if (telemetry.mechanical_power < 0 && telemetry.electrical_power < 0)
             telemetry.efficiency = std::clamp(telemetry.electrical_power / telemetry.mechanical_power, 0.0, 1.0);
         telemetry.command_saturated = command.enabled && std::abs(command.value) > 1;
         telemetry.current_saturated = std::abs(requested_current) >= limit;
-        telemetry.effort_saturated = telemetry.current_saturated && EffortCurrentLimit() < m_parameters.max_current;
+        telemetry.effort_saturated = telemetry.current_saturated && EffortCurrentLimit(state.velocity, requested_current) <= m_parameters.max_current;
         telemetry.voltage_saturated = voltage_saturated;
         return telemetry;
     }
@@ -166,8 +173,8 @@ class ChElectricActuatorModel : public ChActuatorModel {
             !(m_parameters.motoring_efficiency > 0 && m_parameters.motoring_efficiency <= 1) ||
             !(m_parameters.generating_efficiency > 0 && m_parameters.generating_efficiency <= 1))
             throw std::invalid_argument("Invalid electric actuator model parameters");
-        if (!std::isfinite(m_parameters.quadrant_smoothing) || m_parameters.quadrant_smoothing <= 0)
-            throw std::invalid_argument("Quadrant smoothing power must be positive and finite");
+        if (!std::isfinite(m_parameters.loss_smoothing_speed) || m_parameters.loss_smoothing_speed <= 0)
+            throw std::invalid_argument("Loss smoothing speed must be positive and finite");
         if (!m_parameters.allow_inconsistent_constants &&
             std::abs(m_parameters.torque_constant - m_parameters.back_emf_constant) > 1e-6 * std::max(m_parameters.torque_constant, m_parameters.back_emf_constant))
             throw std::invalid_argument("SI torque and back-EMF constants must match (or explicitly opt out)");
@@ -181,26 +188,30 @@ class ChElectricActuatorModel : public ChActuatorModel {
         return voltage;
     }
 
-    double EffortCurrentLimit() const { return m_parameters.max_effort * m_parameters.generating_efficiency / (m_parameters.gear_ratio * m_parameters.torque_constant); }
+    double EffortCurrentLimit(double speed, double direction) const {
+        double unit_current = std::copysign(1.0, direction);
+        double effort_per_amp = std::abs(m_parameters.gear_ratio * m_parameters.torque_constant * unit_current - GearLoss(unit_current, speed));
+        return effort_per_amp == 0 ? std::numeric_limits<double>::infinity() : m_parameters.max_effort / effort_per_amp;
+    }
 
-    double CurrentLimit() const { return std::min(m_parameters.max_current, EffortCurrentLimit()); }
+    double CurrentLimit(double speed, double direction) const { return std::min(m_parameters.max_current, EffortCurrentLimit(speed, direction)); }
+
+    double BoundCurrent(double current, double speed) const { return std::clamp(current, -CurrentLimit(speed, -1), CurrentLimit(speed, 1)); }
 
     double SteadyStateCurrent(const ActuatorCommand& command, double output_speed) const {
         double voltage = AppliedVoltage(command, nullptr);
         double motor_speed = m_parameters.gear_ratio * output_speed;
         double requested_current = (voltage - m_parameters.back_emf_constant * motor_speed) / m_parameters.resistance;
-        return std::clamp(requested_current, -CurrentLimit(), CurrentLimit());
+        return BoundCurrent(requested_current, output_speed);
+    }
+
+    double GearLoss(double current, double output_speed) const {
+        return ActuatorTransmissionLoss(m_parameters.gear_ratio * m_parameters.torque_constant * current, output_speed, m_parameters.loss_smoothing_speed,
+                                        1 - m_parameters.motoring_efficiency, 1 / m_parameters.generating_efficiency - 1);
     }
 
     double EffortFromCurrent(double current, double output_speed) const {
-        double motor_effort = m_parameters.torque_constant * current;
-        double motor_speed = m_parameters.gear_ratio * output_speed;
-        double power = motor_effort * motor_speed;
-        // Blend through unity at zero power: a direct blend between the two efficiencies can create energy.
-        double q = std::min(std::abs(power) / m_parameters.quadrant_smoothing, 1.0);
-        double blend = q * q * (3 - 2 * q);
-        double factor = power >= 0 ? 1 + (m_parameters.motoring_efficiency - 1) * blend : 1 + (1 / m_parameters.generating_efficiency - 1) * blend;
-        double requested_effort = motor_effort * m_parameters.gear_ratio * factor;
+        double requested_effort = m_parameters.gear_ratio * m_parameters.torque_constant * current - GearLoss(current, output_speed);
         requested_effort -= m_parameters.coulomb_friction * std::tanh(output_speed / m_parameters.friction_smoothing_speed);
         requested_effort -= m_parameters.viscous_friction * output_speed;
         return requested_effort;

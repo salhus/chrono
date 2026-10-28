@@ -13,6 +13,7 @@ The headers in `src/chrono/physics/actuator_models/` implement models in
 `chrono::actuator_models` using **only the C++ standard library**:
 
 - `ChActuatorModel.h`: command, kinematic state, telemetry, and the model interface.
+- `ChActuatorSmoothing.h`: shared passive, speed-based transmission-loss crossover.
 - `ChElectricActuatorModel.h`: a DC equivalent circuit, transmission losses, and output friction.
 - `ChTabulatedActuatorModel.h`: measured effort envelopes, efficiency maps, and friction curves.
 
@@ -111,10 +112,11 @@ selects the input-function evaluation time; it does not reconstruct historical s
 | `efficiency` | Instantaneous conversion ratio in [0,1], or the tabulated estimate |
 | `current` | Electric winding current [A]; zero if not supplied by the model |
 | `copper_loss` | Electric winding loss \f$Ri^2\f$ [W]; zero if not supplied |
+| `gear_loss` | Nonnegative transmission loss [W] for electric models; aggregate map conversion loss [W] for tabulated models |
 | `command_saturated` | An enabled normalized command was clipped |
 | `voltage_saturated` | An enabled electric voltage request exceeded the bus voltage |
 | `current_saturated` | The effective current cap is active (electric model) |
-| `effort_saturated` | The tighter effort-derived current cap is active (electric model); both flags can be true |
+| `effort_saturated` | The effort-derived current cap is active and no looser than `max_current` (electric model); both flags can be true |
 
 For the electric model the final signed conversion ratio is
 \f[
@@ -156,128 +158,270 @@ Unless stated otherwise, numeric parameters must be finite. Invalid parameters t
 | `motoring_efficiency` | \f$\eta_m\f$ [dimensionless] | 0.9 | \f$0<\eta_m\leq1\f$ |
 | `generating_efficiency` | \f$\eta_g\f$ [dimensionless] | 0.8 | \f$0<\eta_g\leq1\f$ |
 | `max_current` | \f$I_{\max}\f$ [A] | 10 | Positive |
-| `max_effort` | Electromagnetic output effort ceiling [N or N m] | Positive infinity | Positive; infinity disables the effort-derived current cap |
+| `max_effort` | Delivered machine-plus-transmission effort magnitude ceiling, before external friction [N or N m] | Positive infinity | Positive; infinity disables the effort-derived current cap |
 | `coulomb_friction` | \f$F_c\f$ [N or N m] | 0 | Nonnegative |
 | `viscous_friction` | \f$b\f$ [N s/m or N m s/rad] | 0 | Nonnegative |
 | `friction_smoothing_speed` | \f$v_s\f$ [m/s or rad/s] | 0.001 | Positive |
 | `allow_inconsistent_constants` | Opt out of SI constant consistency check | false | Boolean |
-| `quadrant_smoothing` | \f$\epsilon_p\f$ [W] | 0.001 | Positive |
+| `loss_smoothing_speed` | \f$w_s\f$ [m/s or rad/s], output-side transmission crossover width | 0.01 | Positive |
 
-In coherent SI units a reciprocal motor requires \f$K_t=K_e\f$. By default the constructor checks
-agreement to relative tolerance \f$10^{-6}\f$. `allow_inconsistent_constants=true` is an explicit
-escape hatch for fitted/nonphysical data, **not** a correction: the resulting model need not conserve
-energy. Convert rpm-based constants before constructing the model.
+In coherent SI units a reciprocal motor requires \f$K_t=K_e\f$: electromagnetic power
+\f$K_ti\omega_{\rm motor}\f$ must equal back-EMF power \f$K_e\omega_{\rm motor}i\f$.
+This also applies to a linear motor: \f$K_t\f$ [N/A] and \f$K_e\f$ [V s/m] have the same
+numerical value because force times speed equals voltage times current. By default the constructor
+checks agreement to relative tolerance \f$10^{-6}\f$. `allow_inconsistent_constants=true` is an
+explicit escape hatch for fitted/nonphysical data, **not** a correction: the resulting model need
+not conserve energy. Convert datasheet constants first; for example, a back-EMF constant in
+V/rpm is multiplied by \f$60/(2\pi)\f$ to obtain V/(rad/s), while a speed constant
+\f$K_v\f$ in rpm/V gives \f$K_e=60/(2\pi K_v)\f$.
 
-## Circuit, current state, and smooth transmission
+## Deriving a passive transmission loss
 
-For enabled command \f$u\f$, \f$V=V_b\operatorname{clamp}(u,-1,1)\f$; otherwise \f$V=0\f$.
-Motor speed is \f$\omega_{\rm motor}=Nv\f$ and back-EMF is \f$K_eNv\f$.
-With \f$L>0\f$ there is one state, \f$y_0=i\f$, initially zero:
+Let \f$e_0=NK_ti\f$ be ideal machine effort referred to the output, and
+\f$P_{\rm machine}=e_0v\f$. Write delivered effort **before external friction** as
+\f$e_d=e_0-\ell\f$, where \f$\ell\f$ is signed loss effort.
+For motoring, efficiency means \f$e_dv=\eta_m e_0v\f$; for generating it means
+\f$e_0v=\eta_g e_dv\f$ (both powers negative). Therefore the exact directional laws are
 \f[
- L\dot{i}=V-Ri-K_eNv.
+ e_d=\begin{cases}\eta_m e_0,&e_0v>0,\\ e_0/\eta_g,&e_0v<0,\end{cases}
+ \qquad
+ \ell=\begin{cases}(1-\eta_m)e_0,&e_0v>0,\\
+                  (1-1/\eta_g)e_0,&e_0v<0.\end{cases}
 \f]
-Both current and electromagnetic effort limits are enforced through the fixed bound
+Define nonnegative coefficients \f$c_m=1-\eta_m\f$ and \f$c_g=1/\eta_g-1\f$.
+Then \f$\ell=c_m|e_0|\operatorname{sign}(v)\f$ in motoring and
+\f$\ell=c_g|e_0|\operatorname{sign}(v)\f$ in generating.
+In either case \f$P_{\rm gear}=\ell v\geq0\f$ and
+\f$P_{\rm machine}=e_dv+P_{\rm gear}\f$.
+
+At rest, efficiency ratios do not specify a unique static torque: both mechanical powers are zero.
+An idealized static-friction transmission admits the interval between
+\f$\eta_m e_0\f$ and \f$e_0/\eta_g\f$:
 \f[
- I_{\rm lim}=\min\left(I_{\max},\frac{e_{\max}\eta_g}{NK_t}\right).
+ e_d\in[\min(\eta_m e_0,e_0/\eta_g),\ \max(\eta_m e_0,e_0/\eta_g)].
 \f]
-Since \f$1/\eta_g\f$ is the largest transmission factor, this conservative current cap guarantees
-\f$|e_{\rm em}|\leq e_{\max}\f$ in every quadrant without independently clipping output torque.
-For finite `max_effort`, the bound can reduce available motoring and stall effort below that ceiling.
-When the effort-derived current cap dominates, achievable zero-speed stall effort is at most
-\f$e_{\max}\eta_g\f$, and far-branch motoring effort is at most
-\f$e_{\max}\eta_m\eta_g\f$; voltage/resistance can reduce both further.
-For example, `max_effort=100`, \f$\eta_m=0.9\f$, and \f$\eta_g=0.8\f$ give ceilings of
-80 at stall and 72 in far-branch motoring, in the chosen effort units, not a 100-unit stall rating.
-**Passive friction is additional** and is never clipped away: the final total effort magnitude can
-exceed `max_effort`. This avoids erasing dissipative back-driving torque or decoupling mechanical
-effort from the electrical current.
-The same effective current cap is used by the ODE, effort evaluation, and telemetry.
-`effort_saturated` is true when the effort-derived cap is tighter than `max_current` and the effective
-cap is active; `current_saturated` reports the effective cap regardless of which parameter sets it.
+**Sort the endpoints for negative effort.** A true static model would choose a value from this
+band through load equilibrium or a friction constraint. The present model instead selects a
+single smooth, memoryless continuation; its rest value is not a measured breakaway/stall rating.
+It does not solve static-friction complementarity.
 
-**Migration note:** `max_effort` is an electromagnetic effort ceiling **before passive friction**,
-not a hard clip of final force/torque. A final torque clip can erase required braking effort while
-leaving generated electrical power unchanged, creating energy during regeneration.
-This conservative constitutive cap is not a hardware safety limiter. Model safety protection,
-controller switching, or mechanical torque-limiting devices separately in the plant if required.
+### Speed-based crossover and bounded slope
 
-At \f$i\geq I_{\rm lim}\f$ with positive unconstrained derivative, or
-\f$i\leq-I_{\rm lim}\f$ with negative unconstrained derivative, the RHS is set to zero.
-An inward derivative remains active, allowing recovery from saturation.
-The analytic current Jacobian is \f$-R/L\f$ normally and **exactly zero** in an outward-clamped row.
-Effort and telemetry use current subject to the configured limits; a derivative clamp is not an
-exact projection of arbitrary numerical overshoots, so resolve limit crossings with appropriate steps.
-
-With \f$L=0\f$ there are no internal states and current is obtained algebraically:
+`ActuatorTransmissionLoss(e0, v, ws, cm, cg)` implements the following shared law.
+Define the clamped cubic
 \f[
- i_{\rm qs}=\operatorname{clamp}\left((V-K_eNv)/R,-I_{\rm lim},I_{\rm lim}\right).
-\f]
-The current dynamics are marked stiff whenever \f$L>0\f$.
-
-To avoid a discontinuous gearbox torque at a power-quadrant transition, define
-\f[
- p=NK_tiv,\qquad
- q=\min(|p|/\epsilon_p,1),\qquad h=q^2(3-2q),
+ h(z)=\begin{cases}0,&z\leq0,\\ z^2(3-2z),&0<z<1,\\1,&z\geq1,\end{cases}
+ \qquad q=|v/w_s|,
 \f]
 \f[
- a(p)=
- \begin{cases}
-  1+(\eta_m-1)h,&p\geq0,\\
-  1+(1/\eta_g-1)h,&p<0.
- \end{cases}
+ c_d=\begin{cases}c_m,&\operatorname{sign}(e_0)=\operatorname{sign}(v),\\
+                  c_g,&\text{otherwise},\end{cases}
+ \qquad
+ s(v)=\operatorname{sign}(v)h(2q),\qquad c(v)=c_dh(q),
 \f]
-The electromagnetic output effort before friction is \f$e_{\rm em}=NK_ti\,a(p)\f$.
-This compact \f$C^1\f$ blend reaches the **exact** motoring branch \f$a=\eta_m\f$ for
-\f$p\geq\epsilon_p\f$ and generating branch \f$a=1/\eta_g\f$ for
-\f$p\leq-\epsilon_p\f$. At zero power \f$a=1\f$.
-Thus \f$(1-a)p\geq0\f$: smoothing itself cannot create energy in either quadrant.
-It is a regularization near zero power, not a measured low-speed gearbox law.
+\f[
+ \ell=c(v)|e_0|s(v)
+      =c_d|e_0|\operatorname{sign}(v)h(q)h(2q).
+\f]
+Set \f$s(0)=c(0)=0\f$; sign choices at zero do not affect the loss.
+Both cubic factors ramp from zero immediately: there is **no central deadzone**.
+The signed factor \f$s\f$ reaches \f$\operatorname{sign}(v)\f$ at \f$|v|=w_s/2\f$,
+while \f$c\f$ reaches its directional coefficient at \f$|v|=w_s\f$.
+At \f$|v|\geq w_s\f$, the motoring and generating laws above are **exact**, regardless of effort
+magnitude. At rest \f$\ell=0\f$ and \f$e_d=e_0\f$.
+
+Only the current quadrant's coefficient is used; there is **no averaging or cross-quadrant
+coefficient contamination**, even for highly asymmetric efficiencies.
+Since \f$0\leq h(q)h(2q)\leq1\f$, motoring loss satisfies
+\f$|\ell|\leq c_m|e_0|\f$ and generating loss satisfies \f$|\ell|\leq c_g|e_0|\f$.
+Consequently, for nonzero \f$e_0\f$, \f$e_d/e_0\in[\eta_m,1]\f$ in motoring and
+\f$e_d/e_0\in[1,1/\eta_g]\f$ in generating. Thus smoothing cannot reverse motoring torque;
+the signed effort lies between the corresponding ideal and far-branch values.
+
+Since \f$c\geq0\f$ and \f$s(v)v\geq0\f$, the loss is passive everywhere, including the crossover.
+For fixed \f$e_0\f$, both \f$s\f$ and \f$c\f$ are \f$C^1\f$ in speed, including zero and
+the half/full-band joins. In particular, even though \f$c_d\f$ switches at a speed reversal,
+\f$c=c_dh(q)\f$ rolls off quadratically to zero on both sides, with derivative zero at the crossing.
+To bound the product derivative, let \f$f(q)=h(q)h(2q)\f$.
+The cubic has \f$\max |h'|=3/2\f$, and the normalized signed factor has maximum slope 3.
+For \f$0\leq q\leq1/2\f$, \f$h(q)\leq1/2\f$, so
+\f[
+ |f'(q)|\leq |h'(q)|h(2q)+h(q)\,2|h'(2q)|
+           \leq\tfrac32+\tfrac12(3)=3.
+\f]
+For \f$q\geq1/2\f$, \f$h(2q)=1\f$ is constant and
+\f$|f'(q)|=|h'(q)|\leq3/2\f$ (zero beyond \f$q=1\f$).
+Thus, including the continuous derivative at zero,
+\f[
+ \left|\frac{\partial\ell}{\partial v}\right|
+ \leq \frac{3\max(c_m,c_g)|e_0|}{w_s}.
+\f]
+Thus the rigorous dimensionless bound is **\f$k=3\f$**, independent of how small the effort is.
+Before hard current limiting, actual delivered effort is \f$C^1\f$ in speed at fixed current,
+but need not be \f$C^1\f$ in current at fixed speed (the law contains \f$|e_0|\f$).
+Hard-limit transitions can also introduce derivative corners. There is no new mechanical
+effort-derivative/KRM interface; the internal-current Jacobian remains the one described below.
+
+The default `loss_smoothing_speed=1e-2` is an output-speed scale, in rad/s or m/s, **not watts**.
+Choose \f$w_s\f$ **much larger than solver speed noise** and **much smaller than normal operating
+speed**. When resolving a reversal, aim for \f$|\dot{v}|\Delta t\ll w_s\f$ so a step does not
+skip the crossover; this is a resolution guideline, not a universal stability criterion.
+Reducing it increases the worst-case velocity slope as \f$1/w_s\f$ and can worsen stiffness.
+Resolve reversals and compare results after timestep refinement; do not treat smoothing as an
+identified low-speed gearbox or stiction law. `friction_smoothing_speed` is a separate scale.
 
 Output friction is
 \f[
  e_f=F_c\tanh(v/v_s)+bv,\qquad e_{\rm out}=e_{\rm em}-e_f.
 \f]
 Friction dissipates \f$e_fv\geq0\f$ and vanishes at rest;
-there is no static-friction/stiction constraint.
+there is no static-friction/stiction constraint. Here \f$e_{\rm em}=e_d=e_0-\ell\f$.
+A physical external Coulomb stiction model would additionally allow a rest reaction in
+\f$[-F_c,F_c]\f$; the implemented \f$\tanh\f$ law instead selects zero at rest.
+
+## Circuit, current state, and delivered-effort limits
+
+For enabled command \f$u\f$, \f$V=V_b\operatorname{clamp}(u,-1,1)\f$; otherwise \f$V=0\f$.
+Motor speed is \f$\omega_{\rm motor}=Nv\f$ and back-EMF is \f$K_eNv\f$.
+With \f$L>0\f$ there is one state, \f$y_0=i\f$, initially zero, and the unconstrained circuit is
+\f[
+ L\dot{i}=V-Ri-K_eNv.
+\f]
+For current direction \f$\sigma=\pm1\f$, let
+\f$\operatorname{GearLoss}(\sigma,v)\f$ denote signed loss effort evaluated with a unit current
+of that sign, i.e. the helper above with \f$e_0=NK_t\sigma\f$.
+Positive homogeneity in current magnitude gives the instantaneous bounds
+\f[
+ I_E(v,\sigma)=\frac{e_{\max}}
+ {|NK_t\sigma-\operatorname{GearLoss}(\sigma,v)|},\qquad
+ I_\sigma(v)=\min(I_{\max},I_E(v,\sigma)).
+\f]
+A zero denominator imposes no effort-derived current restriction. These bounds depend on
+**speed and current direction**, not simply speed magnitude.
+They enforce \f$|e_d|\leq e_{\max}\f$ without independently clipping torque.
+At rest \f$I_E=e_{\max}/(NK_t)\f$. Outside the crossover, motoring has
+\f$I_E=e_{\max}/(\eta_m NK_t)\f$ and generating has
+\f$I_E=e_{\max}\eta_g/(NK_t)\f$.
+Thus, if voltage and `max_current` permit, motoring can deliver **exactly `max_effort`**,
+not the conservatively derated \f$e_{\max}\eta_m\eta_g\f$.
+Braking is capped at the same delivered magnitude: `max_effort` represents a symmetric
+transmission output rating, not a motor-only torque rating.
+
+**External friction is additional** and is never clipped away: final total effort magnitude can
+exceed `max_effort`. A post-hoc final torque clip could erase required braking effort while leaving
+bus generation unchanged. The ODE, effort evaluation, and telemetry instead share the same current
+bounds. `current_saturated` reports an active effective bound; `effort_saturated` additionally
+requires the effort-derived bound to be no looser than `max_current`.
+
+At \f$i\geq I_+(v)\f$ with positive unconstrained derivative, or
+\f$i\leq-I_-(v)\f$ with negative unconstrained derivative, the RHS is zero.
+An inward derivative remains active. At fixed speed, the analytic
+\f$\partial\dot{i}/\partial i\f$ is \f$-R/L\f$ on the ordinary branch and zero on an
+outward-clamped branch; the speed-based loss does not change it.
+The clamp test uses the **strict outward unconstrained voltage residual**
+\f$r=V-Ri-K_eNv\f$: \f$r>0\f$ at the upper bound or \f$r<0\f$ at the lower bound.
+An equilibrium exactly on a bound has \f$r=0\f$ and retains the ordinary \f$-R/L\f$ Jacobian,
+not zero merely because the RHS is zero.
+Effort and telemetry **project numerical current overshoots** onto
+\f$[-I_-(v),I_+(v)]\f$, but do not reset the integrated state.
+Because these bounds move with speed, blocking outward derivatives is **not exact moving-bound
+complementarity enforcement**: a shrinking bound may overtake the state.
+Resolve crossings, commands, and speed changes with suitable timesteps and verify convergence.
+Projection alone does not make an overshot state's stored energy consistent with telemetry.
+This is an idealized dissipative limiter, not hardware safety protection or a detailed controller.
+
+With \f$L=0\f$ there are no internal states:
+\f[
+ i_{\rm qs}=\operatorname{clamp}\left((V-K_eNv)/R,-I_-(v),I_+(v)\right).
+\f]
+The current dynamics are marked stiff whenever \f$L>0\f$.
+
+**Migration:** `Parameters` and the existing model/binding names remain unchanged.
+`quadrant_smoothing` has been removed entirely; replace it with `loss_smoothing_speed`.
+There is no universal watts-to-speed conversion because the old transition width depended on load.
+`max_effort` now rates delivered machine-plus-transmission effort **before external friction**,
+using directional instantaneous current caps instead of the former conservative fixed cap.
+Recheck operating points and saturation when migrating; this is not a clip of final output effort.
 
 ## Power balance and regeneration
 
-Without active current/output limits, and with \f$K_t=K_e\f$,
+With \f$K_t=K_e\f$ and no active limiter, the circuit and transmission balances are
 \f[
  P_b=Vi=Ri^2+\frac{d}{dt}\left(\tfrac12 Li^2\right)+K_tiNv,
 \f]
 \f[
- P_b=P_m+Ri^2+Li\dot{i}+(1-a)p+e_fv.
+ P_{\rm machine}=P_m+P_{\rm gear}+P_f,\qquad
+ P_{\rm gear}=\ell v,\qquad P_f=e_fv.
 \f]
-The magnetic-storage power **\f$Li\dot{i}\f$ is essential** for transient balance.
-For \f$L=0\f$ it vanishes. The extra term for inconsistent constants is
-\f$(K_e-K_t)iNv\f$, which can have either sign.
-The hard current constraint represents an ideal dissipative limiter, not a detailed bus controller.
-For a bounded state its extra power is
+In motoring, energy flows bus → copper/storage → machine → transmission loss → external
+friction/output. In regeneration the mechanical flow reverses, while copper, transmission, and
+friction still dissipate. The full balance, including the existing ideal limiter, is
+\f[
+ \boxed{P_b=P_m+Ri^2+\frac{d}{dt}\left(\tfrac12 Li^2\right)
+                   +P_{\rm gear}+P_f+P_{\rm lim}}.
+\f]
+The magnetic-storage power **\f$Li\dot{i}\f$ is essential** for transient balance; it vanishes
+when \f$L=0\f$. All losses are nonnegative for a resolved admissible state with consistent constants.
+The limiter term is
 \f[
  P_{\rm lim}=i(V-Ri-K_eNv-L\dot{i})\geq0.
 \f]
-Add this term to the right-hand side of the balance when the limiter is active (also for capped
-quasi-static current). It is not included in `copper_loss`, and numerical current overshoots must be
-controlled before using this balance quantitatively.
+It is zero on the unconstrained circuit, and can be positive for outward-clamped dynamic current
+or capped quasi-static current. **Bus telemetry remains \f$Vi\f$**: clipping current can dissipate
+extra \f$P_{\rm lim}\f$; it does not silently replace bus power with mechanical power plus copper
+loss. This idealized dissipation is neither `copper_loss` nor `gear_loss`, and is not a detailed
+regenerative bus-controller model. Control numerical overshoots and moving-bound crossings before
+using this balance quantitatively; the raw state's magnetic energy cannot be combined indiscriminately
+with projected-current telemetry.
+If inconsistent constants are allowed, add \f$(K_e-K_t)iNv\f$ to the right-hand side;
+this term can have either sign and forfeits the physical passivity guarantee.
+
+The four machine quadrants (nonzero current, \f$|v|\geq w_s\f$, external friction omitted) are:
+
+| Quadrant | Speed \f$v\f$ | Current / machine effort | \f$P_{\rm machine}\f$ | Mechanical mode |
+|---|---|---|---|---|
+| I | + | + | + | Forward motoring |
+| II | + | - | - | Forward braking/generating |
+| III | - | - | + | Reverse motoring |
+| IV | - | + | - | Reverse braking/generating |
+
+Representative terminal modes, on the same far branches and without external friction, are shown
+below. Torque \f$\tau=e_d\f$ has the current sign (use force for a linear actuator).
+
+| Terminal mode | \f$V\f$ | \f$i\f$ | \f$v\f$ | \f$\tau\f$ | \f$Vi\f$ |
+|---|---|---|---|---|---|
+| Forward motoring | + | + | + | + | + |
+| Reverse motoring | - | - | - | - | + |
+| Forward regenerative braking | + | - | + | - | - |
+| Reverse regenerative braking | - | + | - | + | - |
+| Forward short-circuit braking | 0 | - | + | - | 0 |
+| Reverse short-circuit braking | 0 | + | - | + | 0 |
+| Forward plugging | - | - | + | - | + |
+| Reverse plugging | + | + | - | + | + |
 
 Regeneration requires **negative terminal power**, not merely negative output mechanical power.
-For example, zero applied voltage gives zero bus power even while back-driving produces current,
-copper loss, and mechanical braking. Conversely a positive-voltage command can regenerate when
-back-EMF exceeds that voltage and current becomes negative.
+In quadrant II, \f$V>0,i<0\f$ returns energy to the bus; in quadrant IV,
+\f$V<0,i>0\f$ does likewise. With \f$V=0\f$, either braking quadrant is **short-circuit braking**:
+bus power is zero and absorbed power becomes loss (or transient storage).
+With voltage opposite speed and current in the braking direction, \f$Vi>0\f$ is **plugging**:
+both the bus and mechanical system supply dissipated energy, not regeneration.
+For example, positive command can regenerate when back-EMF exceeds the applied positive voltage.
+Inductive transients and external friction can complicate classification; inspect signed powers
+rather than inferring bus energy direction from command or final torque alone.
 
 ## Analytic checks and time scales
 
 At rest, the steady current is
-\f$i_{\rm stall}=\operatorname{clamp}(V/R,-I_{\rm lim},I_{\rm lim})\f$ and the smooth model gives
-\f$e_{\rm stall}=NK_ti_{\rm stall}\f$ (unity transmission factor at zero power).
-This is the actual voltage-dependent steady stall result, not a current-limit rating.
-`GetStallEffort()` evaluates this expression at the full positive bus voltage, including the
-effort-derived current bound.
-The absence of \f$\eta_m\f$ at zero speed is **intentional**: the smooth coefficient is unity at
-zero electromagnetic power, rather than extending the far-branch efficiency to the crossover.
-Away from the smoothing region, the usual motoring approximation is
-\f$e\simeq\eta_mNK_ti\f$; do not substitute that approximation into the exact zero-speed formula.
+\f$i_{\rm stall}=\operatorname{clamp}(V/R,-I_-(0),I_+(0))\f$ and
+\f$e_{\rm stall}=NK_ti_{\rm stall}\f$.
+`GetStallEffort()` is exactly `ComputeEffort({1, true}, state_at_zero_speed)`, including the
+effort-derived current bound. It is the **mathematical regularized limit as speed approaches zero
+from above**, not a datasheet far-motoring-branch stall rating.
+The zero-speed loss effort is zero, while a directional efficiency continuation would give
+\f$\eta_m NK_ti\f$ in motoring. The discrepancy is intentional: static efficiency is indeterminate,
+and this model selects \f$e_0\f$ from the static band rather than identifying a physical stall law.
+Outside \f$|v|<w_s\f$, the exact motoring result is
+\f$e_d=\eta_m NK_ti\f$; do not substitute it into the regularized zero-speed formula.
 
 The ideal full-voltage, frictionless no-load speed is
 \f$v_0=V_b/(K_eN)\f$, returned by `GetNoLoadSpeed()`.
@@ -302,9 +446,12 @@ For finite inductance the coupled small-signal characteristic equation is
 # Tabulated measured actuator {#actuator_models_tabulated}
 
 `ChTabulatedActuatorModel` has zero states. Its constructor accepts eight vectors, followed by
-an optional ninth argument `double friction_smoothing_speed = 1e-3`.
-Existing eight-argument calls remain valid. `SetFrictionSmoothingSpeed()` accepts only finite positive
-speeds [m/s or rad/s], and `GetFrictionSmoothingSpeed()` returns the value.
+optional `double friction_smoothing_speed = 1e-3` and trailing
+`double loss_smoothing_speed = 1e-2`. Existing eight- and nine-argument calls remain valid.
+`SetFrictionSmoothingSpeed()` and `SetLossSmoothingSpeed()` accept only finite positive
+output speeds [m/s or rad/s]; the corresponding `GetFrictionSmoothingSpeed()` and
+`GetLossSmoothingSpeed()` return them. The loss scale regularizes estimated input power,
+**not** the measured delivered-effort envelope.
 
 All data are **output-side SI quantities**; do not apply a second gear reduction:
 
@@ -335,7 +482,7 @@ chrono::actuator_models::ChTabulatedActuatorModel measured(
     {0.80, 0.85, 0.86, 0.90},           // speed=0 row, then speed=10 row
     {0.70, 0.75, 0.76, 0.80},           // generating rows, same layout
     {0.0, 10.0}, {1.0, 2.0},            // friction speed and magnitude
-    0.01);                              // smoothing speed [rad/s]
+    0.001, 0.01);                        // friction and conversion-loss smoothing speeds [rad/s]
 ~~~
 
 If \f$E(|v|)\f$ is the interpolated envelope and \f$F(|v|)\f$ the friction curve,
@@ -344,13 +491,41 @@ If \f$E(|v|)\f$ is the interpolated envelope and \f$F(|v|)\f$ the friction curve
 \f]
 where \f$u_c\f$ is the clamped enabled command or zero when disabled.
 The envelope limits **commanded** effort, not the total effort including friction.
-Efficiency is looked up at \f$(|v|,|e|)\f$ using the sign of final \f$ev\f$ to select the map.
-The inferred electrical power is \f$P_b=P_m/\eta_m\f$ when motoring and
-\f$P_b=\eta_gP_m\f$ when generating; reported efficiency is zero at zero power.
-There is no winding current, copper loss, or magnetic storage in this model.
-The maps should describe the complete measured output/bus conversion consistently with the chosen
-friction curve. In particular, disabled friction can be reported as absorbed mechanical power with an
-inferred bus return: this is a phenomenological map, not an electrical disconnect or winding model.
+Both efficiency maps are looked up at \f$(|v|,|e|)\f$, using final delivered effort.
+Unlike the electric model, this effort is already an output measurement: do **not** subtract another
+transmission loss from it. Instead estimate upstream input power by **adding** a passive conversion
+loss, using the same speed helper but different coefficients:
+\f[
+ c_m^{\rm map}=1/\eta_m-1,\qquad c_g^{\rm map}=1-\eta_g,\qquad
+ \ell_{\rm map}=\operatorname{ActuatorTransmissionLoss}
+       (e,v,w_s,c_m^{\rm map},c_g^{\rm map}),
+\f]
+\f[
+ P_m=ev,\qquad P_{\rm map}=\ell_{\rm map}v\geq0,\qquad P_b=P_m+P_{\rm map}.
+\f]
+For \f$|v|\geq w_s\f$, the map formulas are exact:
+motoring gives \f$P_b=P_m+(1/\eta_m-1)P_m=P_m/\eta_m\f$;
+generating gives \f$P_b=P_m-(1-\eta_g)P_m=\eta_gP_m\f$.
+Inside the band, the same directional cubic-product crossover supplies a passive input-power estimate
+without mixing the two map coefficients.
+Mechanical delivered torque/force is unchanged at **all** speeds.
+`ComputeTelemetry().efficiency` uses the signed power ratios in the telemetry section, and remains
+zero at zero power or when input and output powers have opposing signs.
+**Migration nuance:** tabulated `GetEfficiency()` now returns **1 at zero mechanical power**, the
+limiting speed-crossover value, rather than copying the zero-power telemetry value.
+Away from zero mechanical power it returns the telemetry ratio. This continuation keeps the
+speed crossover continuous; it does not assert perfect physical efficiency at stall, where a power
+ratio is undefined. Code needing the zero-power diagnostic convention should read telemetry.
+
+Here `gear_loss` denotes **aggregate map conversion loss**, not an independently measured gearbox
+loss. Maps must include all device losses consistently with the chosen delivered effort and friction
+curve; there is no separate winding current, copper-loss estimate, or magnetic storage.
+Do not add a second copper or gearbox loss to this map balance.
+For fixed effort and constant map values the crossover is \f$C^1\f$ in speed, with the same slope
+bound using the map coefficients. Linear/bilinear interpolation is only piecewise differentiable:
+this is **not a global \f$C^1\f$ claim at table knots**, endpoint clamps, or effort-envelope corners.
+In particular, disabled friction can still be reported as absorbed mechanical power with an inferred
+bus return: this remains a phenomenological map, not an electrical disconnect or winding model.
 
 # Using the models {#actuator_models_usage}
 
@@ -488,25 +663,43 @@ with a \f$10^{-4}\f$ s step: generating from 40 rad/s and motoring from rest.
 The parameters are \f$R=2\f$ ohm, \f$L=0\f$ H, \f$K_t=K_e=0.2\f$ in SI,
 \f$V_b=24\f$ V, \f$N=4\f$, \f$J=0.1\f$ kg m\f$^2\f$,
 \f$\eta_m=0.9\f$, \f$\eta_g=0.8\f$, and \f$I_{\max}=20\f$ A.
-Friction is zero, the effort ceiling is infinite, and the current bound is inactive in both runs.
+The loss crossover uses \f$w_s=0.01\f$ rad/s. Friction is zero, the effort ceiling is infinite,
+and the current bound is inactive in both runs.
 
 The ideal no-load speed is 30 rad/s. On the exact far branches the analytic checks are
 \f[
  v_m(t)=30\left(1-e^{-t/0.347222\ldots}\right),\qquad
  v_g(t)=30+10e^{-t/0.25}.
 \f]
-These are not exact inside the small smooth crossover region, including the initial motoring instant
-at rest. For example, `GetStallEffort()` gives \f$4(0.2)(24/2)=9.6\f$ N m there, not the
-far-motoring approximation \f$0.9(9.6)=8.64\f$ N m.
-Generating starts with \f$i=(24-0.2(4)(40))/2=-4\f$ A and \f$P_b=-96\f$ W:
-negative bus power demonstrates actual regeneration.
+The time constants are \f$\tau_m=0.347222\ldots\f$ s in motoring and
+\f$\tau_g=0.25\f$ s in generating. These solutions are not exact inside the small speed crossover,
+including the initial motoring instant at rest. The initial values provide direct power checks:
+
+| Quantity | Generating at 40 rad/s | Motoring at 0 rad/s |
+|---|---|---|
+| Current \f$i=(24-0.8v)/2\f$ [A] | -4 | 12 |
+| Ideal output-referred machine torque \f$e_0=0.8i\f$ [N m] | -3.2 | 9.6 |
+| Delivered torque \f$e_d\f$ [N m] | -4 | 9.6 |
+| Bus power \f$Vi\f$ [W] | -96 | 288 |
+| Copper loss \f$Ri^2\f$ [W] | 32 | 288 |
+| Machine power \f$e_0v\f$ [W] | -128 | 0 |
+| Transmission loss \f$\ell v\f$ [W] | 32 | 0 |
+| Mechanical output \f$e_dv\f$ [W] | -160 | 0 |
+
+Generating satisfies \f$-96=-160+32+32\f$ W: negative bus power demonstrates actual regeneration.
+At rest, all mechanical powers vanish and \f$288=288\f$ W is entirely copper loss.
+`GetStallEffort()` returns the regularized 9.6 N m, not the low-speed far-motoring continuation
+\f$\eta_m NK_tV_b/R=8.64\f$ N m.
+Outside the speed band, motoring torque is exactly \f$0.72(12-0.4v)\f$ N m;
+its extrapolation toward zero speed tends to 8.64 N m, whereas the actual smooth zero-speed limit
+is 9.6 N m. The two limits describe different constitutive continuations, not an inconsistency.
 
 The console prints time [s], speed [rad/s], torque [N m], mechanical and bus power [W],
 copper loss [W], current [A], and efficiency [dimensionless].
 For each run it trapezoidally integrates signed bus power, copper loss, and gearbox loss, and reports
 \f[
  E_{\rm residual}=\int P_b\,dt-\Delta\left(\tfrac12 Jv^2\right)
-                 -\int Ri^2\,dt-\int(1-a)p\,dt
+                 -\int Ri^2\,dt-\int P_{\rm gear}\,dt
 \f]
 in joules. Since \f$L=0\f$, there is no magnetic-storage term. The residual is a numerical diagnostic,
 not an exactly zero identity for a finite timestep; reduce the step to check convergence.
@@ -524,9 +717,10 @@ cmake --build build --target demo_MBS_actuator_models --parallel 2
 The relevant existing test programs are:
 
 - `utest_CH_actuator_models`: SI-constant and parameter validation; analytic current, stall, and
-  no-load checks; compact quadrant smoothing continuity, derivatives, and passivity; current-clamp
+  no-load checks; compact speed-based loss continuity, bounded derivatives, and passivity;
+  asymmetric-coefficient sweeps bounding loss by its own quadrant's coefficient; current-clamp
   Jacobian and inward release; telemetry saturation flags and disabled short-circuit behavior;
-  four-quadrant energy balance, conservative effort-derived current limiting, analytic rotor
+  four-quadrant energy balance, speed/direction-dependent delivered-effort limiting, analytic rotor
   integration and integrated energy; table interpolation, clamping, validation, and purity;
   binding force/torque directions and implicit current integration.
 - `utest_CH_actuator_model_bindings`: zero/reference positions; default-zero, clamped, null-function,
