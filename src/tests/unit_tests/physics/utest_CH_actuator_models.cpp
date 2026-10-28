@@ -132,8 +132,7 @@ TEST(ActuatorModels, ElectricSIConstantsAndSmoothingValidation) {
     parameters.back_emf_constant = parameters.torque_constant * (1 + 2e-6);
     EXPECT_THROW(ChElectricActuatorModel{parameters}, std::invalid_argument);
     parameters.back_emf_constant = parameters.torque_constant;
-    for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
-                           std::numeric_limits<double>::quiet_NaN()}) {
+    for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
         parameters.quadrant_smoothing = invalid;
         EXPECT_THROW(ChElectricActuatorModel{parameters}, std::invalid_argument);
         parameters.quadrant_smoothing = 1e-3;
@@ -150,9 +149,7 @@ TEST(ActuatorModels, ElectricAnalyticCurrentStallAndNoLoad) {
     // Ohm's law: i = (u Vbus - Ke N omega)/R, including both signed quadrants.
     for (double command : {-1.0, -0.3, 0.0, 0.3, 1.0}) {
         for (double speed : {-4.0, 0.0, 4.0}) {
-            double expected_current = (command * parameters.bus_voltage -
-                                       parameters.back_emf_constant * parameters.gear_ratio * speed) /
-                                      parameters.resistance;
+            double expected_current = (command * parameters.bus_voltage - parameters.back_emf_constant * parameters.gear_ratio * speed) / parameters.resistance;
             auto telemetry = model.ComputeTelemetry({command, true}, {0, speed, 0});
             EXPECT_NEAR(telemetry.current, expected_current, 1e-12);
             EXPECT_NEAR(telemetry.copper_loss, expected_current * expected_current * parameters.resistance, 1e-12);
@@ -177,19 +174,15 @@ TEST(ActuatorModels, ElectricCompactQuadrantSmoothingIsC1AndPassive) {
     parameters.inductance = 0.2;
     parameters.quadrant_smoothing = 2;
     ChElectricActuatorModel model(parameters);
-    auto effort = [&](double current, double speed) {
-        return model.EffortFromStates({current}, {}, {0, speed, 0});
-    };
+    auto effort = [&](double current, double speed) { return model.EffortFromStates({current}, {}, {0, speed, 0}); };
     // The compact cubic h(q)=q^2(3-2q) joins unity at p=0 to the exact far-quadrant factors.
     for (double current : {-2.0, 2.0}) {
         for (double normalized_power : {-3.0, -1.0, -0.5, -0.01, 0.0, 0.01, 0.5, 1.0, 3.0}) {
-            double speed = normalized_power * parameters.quadrant_smoothing /
-                           (parameters.gear_ratio * parameters.torque_constant * current);
+            double speed = normalized_power * parameters.quadrant_smoothing / (parameters.gear_ratio * parameters.torque_constant * current);
             double power = parameters.gear_ratio * parameters.torque_constant * current * speed;
             double q = std::min(std::abs(normalized_power), 1.0);
             double h = q * q * (3 - 2 * q);
-            double factor = power >= 0 ? 1 + (parameters.motoring_efficiency - 1) * h
-                                       : 1 + (1 / parameters.generating_efficiency - 1) * h;
+            double factor = power >= 0 ? 1 + (parameters.motoring_efficiency - 1) * h : 1 + (1 / parameters.generating_efficiency - 1) * h;
             double actual = effort(current, speed);
             EXPECT_NEAR(actual, parameters.gear_ratio * parameters.torque_constant * current * factor, 1e-12);
             EXPECT_GE(power - actual * speed, -1e-12);
@@ -200,8 +193,7 @@ TEST(ActuatorModels, ElectricCompactQuadrantSmoothingIsC1AndPassive) {
     constexpr double delta = 1e-6;
     for (bool vary_current : {false, true}) {
         for (double join : {-1.0, 0.0, 1.0}) {
-            double crossover = join * parameters.quadrant_smoothing /
-                               (parameters.gear_ratio * parameters.torque_constant);
+            double crossover = join * parameters.quadrant_smoothing / (parameters.gear_ratio * parameters.torque_constant);
             auto sample = [&](double x) { return vary_current ? effort(x, 1) : effort(1, x); };
             double left = (sample(crossover) - sample(crossover - delta)) / delta;
             double right = (sample(crossover + delta) - sample(crossover)) / delta;
@@ -308,16 +300,13 @@ TEST(ActuatorModels, ElectricFourQuadrantEnergyBalance) {
     parameters.friction_smoothing_speed = 0.2;
     // Kirchhoff plus electromagnetic conversion gives:
     // V i - tau omega = R i^2 + L i di/dt + gearbox_loss + friction_loss + limiter_loss.
-    for (auto configuration : {std::make_pair(0.0, std::numeric_limits<double>::infinity()),
-                               std::make_pair(0.2, std::numeric_limits<double>::infinity()),
-                               std::make_pair(0.0, 1.5), std::make_pair(0.2, 1.5)}) {
+    for (auto configuration : {std::make_pair(0.0, std::numeric_limits<double>::infinity()), std::make_pair(0.2, std::numeric_limits<double>::infinity()), std::make_pair(0.0, 1.5),
+                               std::make_pair(0.2, 1.5)}) {
         double inductance = configuration.first;
         double max_effort = configuration.second;
         parameters.inductance = inductance;
         parameters.max_effort = max_effort;
-        double current_limit = std::min(parameters.max_current,
-                                        max_effort * parameters.generating_efficiency /
-                                            (parameters.gear_ratio * parameters.torque_constant));
+        double current_limit = std::min(parameters.max_current, max_effort * parameters.generating_efficiency / (parameters.gear_ratio * parameters.torque_constant));
         ChElectricActuatorModel model(parameters);
         for (double command : {-2.0, -1.0, -0.1, 0.0, 0.1, 1.0, 2.0}) {
             for (double speed : {-12.0, -2.0, -0.001, 0.0, 0.001, 2.0, 12.0}) {
@@ -326,19 +315,13 @@ TEST(ActuatorModels, ElectricFourQuadrantEnergyBalance) {
                         double initial_current = fraction * current_limit;
                         ActuatorCommand input{command, enabled};
                         ActuatorState state{0, speed, 0};
-                        auto telemetry = inductance > 0
-                                             ? model.ComputeTelemetryFromStates({initial_current}, input, state)
-                                             : model.ComputeTelemetry(input, state);
+                        auto telemetry = inductance > 0 ? model.ComputeTelemetryFromStates({initial_current}, input, state) : model.ComputeTelemetry(input, state);
                         double current = telemetry.current;
                         double voltage = enabled ? parameters.bus_voltage * std::clamp(command, -1.0, 1.0) : 0;
-                        double electromagnetic_power =
-                            parameters.gear_ratio * parameters.torque_constant * current * speed;
-                        double friction = parameters.coulomb_friction *
-                                              std::tanh(speed / parameters.friction_smoothing_speed) +
-                                          parameters.viscous_friction * speed;
+                        double electromagnetic_power = parameters.gear_ratio * parameters.torque_constant * current * speed;
+                        double friction = parameters.coulomb_friction * std::tanh(speed / parameters.friction_smoothing_speed) + parameters.viscous_friction * speed;
                         double friction_loss = friction * speed;
-                        double gearbox_loss = electromagnetic_power -
-                                              (telemetry.applied_effort + friction) * speed;
+                        double gearbox_loss = electromagnetic_power - (telemetry.applied_effort + friction) * speed;
                         double current_rate = 0;
                         if (inductance > 0) {
                             std::vector<double> rhs;
@@ -347,27 +330,21 @@ TEST(ActuatorModels, ElectricFourQuadrantEnergyBalance) {
                         }
                         double stored_power = inductance * current * current_rate;
                         double limiter_loss =
-                            (voltage - parameters.resistance * current -
-                             parameters.back_emf_constant * parameters.gear_ratio * speed -
-                             inductance * current_rate) *
-                            current;
-                        SCOPED_TRACE(::testing::Message() << "max_effort=" << max_effort
-                                                         << " L=" << inductance << " u=" << command
-                                                         << " enabled=" << enabled << " w=" << speed
-                                                         << " i=" << current);
+                            (voltage - parameters.resistance * current - parameters.back_emf_constant * parameters.gear_ratio * speed - inductance * current_rate) * current;
+                        SCOPED_TRACE(::testing::Message() << "max_effort=" << max_effort << " L=" << inductance << " u=" << command << " enabled=" << enabled << " w=" << speed
+                                                          << " i=" << current);
                         EXPECT_GE(telemetry.copper_loss, 0);
                         EXPECT_GE(friction_loss, -1e-12);
                         EXPECT_GE(gearbox_loss, -1e-12);
                         EXPECT_GE(limiter_loss, -1e-12);
-                        EXPECT_NEAR(telemetry.electrical_power - telemetry.mechanical_power - telemetry.copper_loss -
-                                        stored_power - gearbox_loss - friction_loss - limiter_loss,
-                                    0, 2e-12);
+                        EXPECT_NEAR(telemetry.electrical_power - telemetry.mechanical_power - telemetry.copper_loss - stored_power - gearbox_loss - friction_loss - limiter_loss, 0,
+                                    2e-12);
                         EXPECT_GE(telemetry.efficiency, 0);
                         EXPECT_LE(telemetry.efficiency, 1);
+                    }
                 }
             }
         }
-      }
     }
 }
 
@@ -378,8 +355,7 @@ TEST(ActuatorModels, ElectricEffortCeilingUsesPassiveCurrentLimiting) {
     parameters.coulomb_friction = 0.4;
     parameters.viscous_friction = 1;
     ChElectricActuatorModel model(parameters);
-    double current_limit = parameters.max_effort * parameters.generating_efficiency /
-                           (parameters.gear_ratio * parameters.torque_constant);
+    double current_limit = parameters.max_effort * parameters.generating_efficiency / (parameters.gear_ratio * parameters.torque_constant);
     // A clipped command need not activate the effort constraint: integrated current is independent of voltage.
     auto command_only = model.ComputeTelemetryFromStates({0}, {2, true}, {});
     EXPECT_TRUE(command_only.command_saturated);
@@ -401,9 +377,7 @@ TEST(ActuatorModels, ElectricEffortCeilingUsesPassiveCurrentLimiting) {
         EXPECT_LT(generating.electrical_power, 0);
         EXPECT_LT(generating.mechanical_power, 0);
         EXPECT_GE(generating.electrical_power - generating.mechanical_power - generating.copper_loss, 0);
-        double friction = parameters.coulomb_friction *
-                              std::tanh(speed / parameters.friction_smoothing_speed) +
-                          parameters.viscous_friction * speed;
+        double friction = parameters.coulomb_friction * std::tanh(speed / parameters.friction_smoothing_speed) + parameters.viscous_friction * speed;
         EXPECT_NEAR(std::abs(generating.applied_effort + friction), parameters.max_effort, 1e-12);
     }
     // The electromagnetic ceiling is enforced through the winding equation, never by erasing regenerative
@@ -442,9 +416,7 @@ TEST(ActuatorModels, ElectricAnalyticRotorIntegrationAndIntegratedEnergy) {
     // or N Kt (V-Ke N omega)/(R eta_g) while generating.
     for (bool generating : {false, true}) {
         double initial_speed = generating ? 1.5 * no_load : 0.25 * no_load;
-        double time_constant = inertia * parameters.resistance /
-                               (parameters.gear_ratio * parameters.gear_ratio *
-                                parameters.torque_constant * parameters.back_emf_constant) *
+        double time_constant = inertia * parameters.resistance / (parameters.gear_ratio * parameters.gear_ratio * parameters.torque_constant * parameters.back_emf_constant) *
                                (generating ? parameters.generating_efficiency : 1 / parameters.motoring_efficiency);
         double step = time_constant / 2000;
         double speed = initial_speed;
@@ -510,9 +482,7 @@ TEST(ActuatorModels, TabulatedRejectsNonmonotonicAxes) {
 }
 
 TEST(ActuatorModels, TabulatedFrictionSmoothingValidationAndC1Passivity) {
-    auto make_model = [](double smoothing) {
-        return ChTabulatedActuatorModel({0}, {10}, {0}, {0}, {0.8}, {0.5}, {0}, {2}, smoothing);
-    };
+    auto make_model = [](double smoothing) { return ChTabulatedActuatorModel({0}, {10}, {0}, {0}, {0.8}, {0.5}, {0}, {2}, smoothing); };
     auto model = make_model(0.2);
     // The regularized Coulomb law is tau_f=-F_c tanh(omega/s), with slope -F_c/s at zero.
     // Its power is always nonpositive, including when input is disabled.
@@ -526,20 +496,15 @@ TEST(ActuatorModels, TabulatedFrictionSmoothingValidationAndC1Passivity) {
         EXPECT_FALSE(telemetry.command_saturated);
     }
     constexpr double delta = 1e-7;
-    double left_slope = (model.ComputeEffort({0, true}, {}) -
-                         model.ComputeEffort({0, true}, {0, -delta, 0})) /
-                        delta;
-    double right_slope = (model.ComputeEffort({0, true}, {0, delta, 0}) -
-                          model.ComputeEffort({0, true}, {})) /
-                         delta;
+    double left_slope = (model.ComputeEffort({0, true}, {}) - model.ComputeEffort({0, true}, {0, -delta, 0})) / delta;
+    double right_slope = (model.ComputeEffort({0, true}, {0, delta, 0}) - model.ComputeEffort({0, true}, {})) / delta;
     EXPECT_NEAR(left_slope, -10, 1e-10);
     EXPECT_NEAR(right_slope, -10, 1e-10);
     EXPECT_NEAR(left_slope, right_slope, 1e-12);
     model.SetFrictionSmoothingSpeed(0.4);
     EXPECT_DOUBLE_EQ(model.GetFrictionSmoothingSpeed(), 0.4);
     EXPECT_NEAR(model.ComputeEffort({0, true}, {0, 0.2, 0}), -2 * std::tanh(0.5), 1e-12);
-    for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
-                           std::numeric_limits<double>::quiet_NaN()}) {
+    for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
         EXPECT_THROW(make_model(invalid), std::invalid_argument);
         EXPECT_THROW(model.SetFrictionSmoothingSpeed(invalid), std::invalid_argument);
         EXPECT_DOUBLE_EQ(model.GetFrictionSmoothingSpeed(), 0.4);
