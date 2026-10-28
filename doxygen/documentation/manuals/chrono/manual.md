@@ -32,6 +32,8 @@ Chrono Core User Manual {#manual_core}
 	* [3D driveline motors](@ref driveline_motors)
 	* [1D motors](@ref shaft_motors)
 
+* @subpage manual_actuators
+
 * @subpage loads
 
 * @subpage collisions

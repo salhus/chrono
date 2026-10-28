@@ -23,8 +23,10 @@ using namespace chrono;
 TEST(ActuatorFixes, TSDAConstantForce) {
     ChActuatorTSDA actuator;
     actuator.SetInputFunction(chrono_types::make_shared<ChFunctionConst>(0.5));
+    actuator.SetActuatorLength(0, 0);
     actuator.SetConstantForce(3);
     actuator.SetBaseForce(2);
+    actuator.Initialize();
 
     EXPECT_DOUBLE_EQ(actuator.GetActuatorForce(0), 4);
 }
@@ -37,6 +39,7 @@ TEST(ActuatorFixes, RSDATorqueAndRestAngle) {
     actuator.SetConstantTorque(4);
     actuator.SetBaseTorque(2);
     actuator.SetSpringCoefficient(3);
+    actuator.Initialize();
 
     EXPECT_DOUBLE_EQ(actuator.GetActuatorTorque(0), 2);
 }
