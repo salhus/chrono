@@ -78,12 +78,16 @@ class ChApi ChActuator : public ChExternalDynamicsODE {
     // Coupling between connected bodies
 
     /// Enable use of a coupling KRM block.
-    /// If enabled, the coupling KRM block depends on the variables of the two connected bodies. In that case, the
-    /// derived class must provide an implementation for the ComputeCouplingKRM function.
+    /// If enabled, the coupling KRM block depends on the variables of the two connected bodies and, if the actuator
+    /// has internal states, on those states. In that case, the derived class must provide an implementation for the
+    /// ComputeCouplingKRM function.
     /// Note that this feature can be used only if the actuator is attached (i.e., Connect was invoked).
     virtual bool EnableCouplingKRM() { return false; }
 
     /// Compute the coupling KRM block, if used.
+    /// The block is square, ordered as [body 1 (6), body 2 (6), internal states (GetNumStates())], and must be loaded
+    /// with Mfactor*M - Rfactor*dQ/dv - Kfactor*dQ/dx. Body rows and columns use Chrono body velocity variables
+    /// (absolute linear velocity, local angular velocity).
     virtual void ComputeCouplingKRM(ChMatrixRef H, double Kfactor, double Rfactor, double Mfactor) {
         if (m_KRM_coupling.GetNumVariables() > 0)
             throw std::runtime_error("ERROR: Derived actuator class does not provide ComputeCouplingKRM");
@@ -95,12 +99,16 @@ class ChApi ChActuator : public ChExternalDynamicsODE {
     ChBody* m_body1;             ///< first connected body
     ChBody* m_body2;             ///< second connected body
     ChVectorDynamic<> m_Qforce;  ///< generalized forcing terms
+    ChVectorDynamic<> m_Qunit;   ///< generalized force per unit effort, equal to d(actuator rate)/d(body velocities)
 
     std::shared_ptr<ChFunction> ref_fun;  ///< actuation function
 
     bool calculate_consistent_IC;  ///< solve initialization nonlinear system
 
-    ChKRMBlock m_KRM_coupling;  ///< optional KRM block, coupling the two connected bodies
+    ChKRMBlock m_KRM_coupling;  ///< optional KRM block, coupling the two connected bodies and internal states
+
+    /// Set up the coupling KRM block variables (if enabled). Called from Connect().
+    void SetupCouplingKRM();
 };
 
 /// Base class for a linear actuator acting between two bodies.

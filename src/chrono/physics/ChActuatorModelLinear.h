@@ -18,6 +18,7 @@
 #include <memory>
 
 #include "chrono/physics/ChActuator.h"
+#include "chrono/physics/ChActuatorModelCoupling.h"
 #include "chrono/physics/actuator_models/ChActuatorModel.h"
 
 namespace chrono {
@@ -53,6 +54,18 @@ class ChApi ChActuatorModelLinear : public ChLinearActuator {
     /// Forward the model's solver stiffness declaration.
     virtual bool IsStiff() const override;
 
+    /// Set the Newton-matrix coupling policy (default AUTO). Must be called before Connect().
+    /// With coupling, the effort sensitivities to body motion and internal states, and the model's reflected inertia,
+    /// enter the system matrix, so stiff electromechanical loops are integrated monolithically. This requires a solver
+    /// that supports KRM blocks (e.g. a direct sparse solver); iterative PSOR does not.
+    void SetCouplingMode(ChActuatorCouplingMode mode) { m_coupling_mode = mode; }
+
+    /// Get the Newton-matrix coupling policy.
+    ChActuatorCouplingMode GetCouplingMode() const { return m_coupling_mode; }
+
+    /// Return whether the coupling block was activated by the last Connect().
+    bool IsCouplingActive() const { return m_coupling_active; }
+
   protected:
     /// Return the model's internal-state dimension.
     virtual unsigned int GetNumStates() const override;
@@ -63,8 +76,19 @@ class ChApi ChActuatorModelLinear : public ChLinearActuator {
     /// Resize and load a validated square model Jacobian, or return false to request finite differences.
     virtual bool CalculateJac(double time, const ChVectorDynamic<>& y, const ChVectorDynamic<>& rhs, ChMatrixDynamic<>& J) override;
 
+    /// Resolve the coupling policy when connecting.
+    virtual bool EnableCouplingKRM() override;
+    /// Load effort and internal-state sensitivities and reflected inertia.
+    virtual void ComputeCouplingKRM(ChMatrixRef H, double Kfactor, double Rfactor, double Mfactor) override;
+    /// Add reflected-inertia momentum to the residual.
+    virtual void IntLoadResidual_Mv(const unsigned int off, ChVectorDynamic<>& R, const ChVectorDynamic<>& w, const double c) override;
+    /// Add the lumped reflected inertia.
+    virtual void IntLoadLumpedMass_Md(const unsigned int off, ChVectorDynamic<>& Md, double& err, const double c) override;
+
   private:
     std::shared_ptr<const actuator_models::ChActuatorModel> m_model;  ///< shared immutable model
+    ChActuatorCouplingMode m_coupling_mode = ChActuatorCouplingMode::AUTO;  ///< coupling policy
+    bool m_coupling_active = false;                                         ///< coupling resolved at Connect()
     bool m_enabled = true;                                            ///< model command enable flag
 };
 

@@ -57,6 +57,9 @@ class ChElectricActuatorModel : public ChActuatorModel {
         double friction_smoothing_speed = 1e-3;     ///< Positive, finite Coulomb smoothing speed [rad/s or m/s].
         bool allow_inconsistent_constants = false;  ///< Explicitly waive the relative 1e-6 Kt/Ke consistency check.
         double loss_smoothing_speed = 1e-2;         ///< Positive, finite transmission crossover speed [rad/s or m/s].
+        /// Motor-side rotor inertia [kg*m^2] (or moving mass [kg] of a linear machine), finite and nonnegative.
+        /// Reflected to the output as gear_ratio^2 * rotor_inertia; requires a solver that supports KRM blocks.
+        double rotor_inertia = 0;
     };
 
     /// Construct with the default SI parameters.
@@ -114,6 +117,9 @@ class ChElectricActuatorModel : public ChActuatorModel {
     /// Winding dynamics require a stiff solver whenever inductance is positive.
     bool IsStiff() const override { return GetNumStates() > 0; }
 
+    /// Rotor inertia reflected through the gear: gear_ratio^2 * rotor_inertia.
+    double GetReflectedInertia() const override { return m_parameters.gear_ratio * m_parameters.gear_ratio * m_parameters.rotor_inertia; }
+
     /// Evaluate effort using the bounded integrated winding current; a zero-state model uses the algebraic solution.
     double EffortFromStates(const std::vector<double>& y, const ActuatorCommand& command, const ActuatorState& state) const override {
         if (GetNumStates() == 0)
@@ -135,6 +141,17 @@ class ChElectricActuatorModel : public ChActuatorModel {
     /// Full-voltage regularized stall effort: limit as output speed approaches zero from above.
     /// This is not the datasheet motoring-branch rating at speeds outside the loss smoothing band.
     double GetStallEffort() const { return ComputeEffort({1, true}, {}); }
+
+    /// Datasheet-style motoring stall rating: full-voltage output effort as speed approaches zero from above, outside
+    /// the loss and friction smoothing bands. Equals motoring_efficiency * gear_ratio * Kt * i minus Coulomb friction,
+    /// with i the smallest of the stall current V/R, max_current, and the max_effort current cap.
+    double GetRatedStallEffort() const {
+        const auto& p = m_parameters;
+        double effort_per_amp = p.motoring_efficiency * p.gear_ratio * p.torque_constant;
+        double current = std::min(p.bus_voltage / p.resistance, p.max_current);
+        double machine_effort = std::min(effort_per_amp * current, p.max_effort);
+        return machine_effort - p.coulomb_friction;
+    }
 
     /// Ideal, frictionless output no-load speed at full bus voltage [rad/s or m/s].
     double GetNoLoadSpeed() const { return m_parameters.bus_voltage / (m_parameters.back_emf_constant * m_parameters.gear_ratio); }
@@ -175,6 +192,8 @@ class ChElectricActuatorModel : public ChActuatorModel {
             throw std::invalid_argument("Invalid electric actuator model parameters");
         if (!std::isfinite(m_parameters.loss_smoothing_speed) || m_parameters.loss_smoothing_speed <= 0)
             throw std::invalid_argument("Loss smoothing speed must be positive and finite");
+        if (!std::isfinite(m_parameters.rotor_inertia) || !(m_parameters.rotor_inertia >= 0))
+            throw std::invalid_argument("Rotor inertia must be finite and nonnegative");
         if (!m_parameters.allow_inconsistent_constants &&
             std::abs(m_parameters.torque_constant - m_parameters.back_emf_constant) > 1e-6 * std::max(m_parameters.torque_constant, m_parameters.back_emf_constant))
             throw std::invalid_argument("SI torque and back-EMF constants must match (or explicitly opt out)");

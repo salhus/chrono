@@ -163,6 +163,14 @@ The electric current Jacobian uses a strictly outward voltage-residual clamp tes
 exactly on a current bound retains `-R/L`, rather than being incorrectly treated as a zero row.
 The manual derives the loss law, static-friction indeterminacy, SI constant consistency, four-quadrant
 power balance (including magnetic storage and limiter dissipation), and worked demo checks.
+Actuator model bindings can couple monolithically with the multibody system: `SetCouplingMode()`
+(`AUTO` by default) loads effort and internal-state sensitivities and reflected inertia into a Newton-matrix
+block over both bodies and the internal states, enabling large implicit steps for damping-dominated and
+stiff electromechanical loops (requires a KRM-capable solver and a Newton-type integrator). Models may
+declare `GetReflectedInertia()`; the electric model adds `Parameters::rotor_inertia` (reflected as
+N^2 * rotor_inertia, default 0) and `GetRatedStallEffort()`. `ChRotationalActuator` now applies the reaction
+torque with the opposite sign on body 1, so free-free actuators conserve angular momentum (previously
+both bodies received the same torque).
 
 ## [Changed] Chrono::Sensor appearance of shapes with no visual material
 

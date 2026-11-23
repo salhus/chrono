@@ -81,6 +81,10 @@ class ChActuatorModel {
     /// Declare whether internal dynamics are stiff.
     virtual bool IsStiff() const { return false; }
 
+    /// Inertia of moving actuator parts reflected to the output coordinate [kg*m^2 or kg], finite and nonnegative.
+    /// A binding adds it to the mass matrix along the actuator coordinate (for example N^2 * J_rotor).
+    virtual double GetReflectedInertia() const { return 0; }
+
     /// Compute effort from internal states; stateless models use ComputeEffort.
     virtual double EffortFromStates(const std::vector<double>&, const ActuatorCommand& command, const ActuatorState& state) const { return ComputeEffort(command, state); }
 
