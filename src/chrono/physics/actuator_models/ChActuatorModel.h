@@ -45,13 +45,13 @@ struct ActuatorState {
 struct ActuatorTelemetry {
     double applied_effort = 0;       ///< Signed effort delivered to the mechanical system.
     double mechanical_power = 0;     ///< applied_effort * velocity; positive means mechanical output.
-    double electrical_power = 0;     ///< Terminal voltage times winding current (electric model).
+    double electrical_power = 0;     ///< Input power drawn from the source: bus/inverter power, or hydraulic p_s Q_s - p_T Q_T.
     double efficiency = 0;           ///< Instantaneous terminal conversion ratio, or table estimate.
     bool command_saturated = false;  ///< An enabled normalized command was clipped to [-1, 1].
     bool current_saturated = false;  ///< The current constraint is active.
     bool effort_saturated = false;   ///< An output effort constraint is active.
     bool voltage_saturated = false;  ///< Requested enabled voltage exceeded the bus voltage.
-    double current = 0;              ///< Winding current [A]; zero if not provided by the model.
+    double current = 0;              ///< Winding current (phase amplitude for PMSM) [A]; zero if not provided.
     double copper_loss = 0;          ///< Winding Joule loss i^2 R [W]; zero if not provided.
     double gear_loss = 0;            ///< Passive transmission loss [W], nonnegative; zero if not provided.
 };

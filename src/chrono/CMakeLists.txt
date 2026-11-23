@@ -302,6 +302,8 @@ set(Chrono_physics_actuators_HEADERS
     physics/actuator_models/ChActuatorModel.h
     physics/actuator_models/ChActuatorSmoothing.h
     physics/actuator_models/ChElectricActuatorModel.h
+    physics/actuator_models/ChHydraulicCylinderModel.h
+    physics/actuator_models/ChPMSMActuatorModel.h
     physics/actuator_models/ChTabulatedActuatorModel.h
     physics/ChHydraulicCircuit.h
     physics/ChHydraulicActuator.h
