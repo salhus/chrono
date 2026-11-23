@@ -9,6 +9,7 @@ SET(TESTS
     utest_CH_actuators
     utest_CH_actuator_models
     utest_CH_actuator_model_bindings
+    utest_CH_actuator_coupling
 )
 
 if(CH_ENABLE_MODULE_PARDISO_MKL)

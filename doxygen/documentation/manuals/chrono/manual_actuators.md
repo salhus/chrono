@@ -83,6 +83,7 @@ The optional stateful contract is:
 | `CalculateRHS(time, y, command, state, rhs)` | Evaluate \f$\dot{y}=f(t,y,u,x,v)\f$ without mutation; resize/fill exactly \f$n\f$ derivatives. Default zeros. |
 | `CalculateJacobian(time, y, command, state, J)` | Optionally fill an \f$n\times n\f$ `vector<vector<double>>`, indexed `[row][column]`, with \f$\partial f/\partial y\f$ at fixed command and mechanical state; return true. Default false requests numerical differentiation in the binding. |
 | `IsStiff()` | Declare stiff internal dynamics; default false. |
+| `GetReflectedInertia()` | Inertia [kg m^2] or mass [kg] of moving actuator parts reflected to the output coordinate; default 0. See [coupling](#actuator_models_coupling). |
 | `EffortFromStates(y, command, state)` | Evaluate the output using supplied integrated states; default delegates to `ComputeEffort`. |
 | `ComputeTelemetry(command, state)` | Stateless telemetry; default fills effort from `ComputeEffort` and mechanical power, leaving other fields zero/false. |
 | `ComputeTelemetryFromStates(y, command, state)` | Stateful telemetry. Default preserves `ComputeTelemetry` fields and replaces effort and mechanical power using `EffortFromStates`. Override when electrical or loss quantities depend on internal states. |
@@ -164,6 +165,7 @@ Unless stated otherwise, numeric parameters must be finite. Invalid parameters t
 | `friction_smoothing_speed` | \f$v_s\f$ [m/s or rad/s] | 0.001 | Positive |
 | `allow_inconsistent_constants` | Opt out of SI constant consistency check | false | Boolean |
 | `loss_smoothing_speed` | \f$w_s\f$ [m/s or rad/s], output-side transmission crossover width | 0.01 | Positive |
+| `rotor_inertia` | \f$J_m\f$ [kg m^2], or moving mass [kg] of a linear machine, motor side | 0 | \f$J_m\geq0\f$; reflected as \f$N^2J_m\f$ (see [coupling](#actuator_models_coupling)) |
 
 In coherent SI units a reciprocal motor requires \f$K_t=K_e\f$: electromagnetic power
 \f$K_ti\omega_{\rm motor}\f$ must equal back-EMF power \f$K_e\omega_{\rm motor}i\f$.
@@ -420,6 +422,9 @@ from above**, not a datasheet far-motoring-branch stall rating.
 The zero-speed loss effort is zero, while a directional efficiency continuation would give
 \f$\eta_m NK_ti\f$ in motoring. The discrepancy is intentional: static efficiency is indeterminate,
 and this model selects \f$e_0\f$ from the static band rather than identifying a physical stall law.
+`GetRatedStallEffort()` returns the datasheet-style far-motoring value
+\f$\min(\eta_m N K_t \min(V/R, I_{\max}), e_{\max}) - F_c\f$ (8.64 N m for the demo parameters with an
+unbinding current limit).
 Outside \f$|v|<w_s\f$, the exact motoring result is
 \f$e_d=\eta_m NK_ti\f$; do not substitute it into the regularized zero-speed formula.
 
@@ -649,6 +654,47 @@ Implicit stability does not resolve a transient automatically: start with a step
 \f$L/R\f$ (for example \f$(L/R)/10\f$), also resolve mechanical motion, commands, friction smoothing,
 and limit crossings, then halve the step to check convergence.
 Choose \f$L=0\f$ only when the electrical transient is intentionally neglected; it changes the model.
+
+## Monolithic coupling and reflected inertia {#actuator_models_coupling}
+
+By default the bindings apply the model effort as an explicit force evaluated at the start of the
+step. A damping-dominated actuator then limits the step to about \f$2J/c\f$, where \f$c=-\partial E/\partial v\f$
+(for the demo motor \f$c\approx\eta_mN^2K_tK_e/R\f$), and a stateful model integrates its winding
+current implicitly while the back-EMF loop through the bodies remains explicit.
+`SetCouplingMode()` (call before `Connect()`) loads an additional Newton-matrix block over
+[body 1, body 2, internal states]:
+
+\f[
+H=M_f\,J_r\,gg^T - R_f\left(\frac{\partial E}{\partial v}gg^T + g\frac{\partial E}{\partial y}^T
++ \frac{\partial f}{\partial v}g^T\right) - K_f\left(\frac{\partial E}{\partial q}gg^T + \frac{\partial f}{\partial q}g^T\right),
+\f]
+
+where \f$g\f$ maps body velocities to the actuator rate (and unit effort to generalized forces), \f$y\f$ are
+the internal states with \f$\dot y=f\f$, and \f$J_r\f$ = `GetReflectedInertia()`. Effort and RHS
+sensitivities come from central differences of the pure model evaluations.
+
+| Mode | Behavior |
+|---|---|
+| `AUTO` (default) | Couple if the model `IsStiff()` or has reflected inertia |
+| `ENABLED` | Always couple |
+| `DISABLED` | Explicit effort only; throws at `Connect()` if the model has reflected inertia |
+
+Requirements and limitations:
+- KRM blocks need a solver that assembles them (for example `SPARSE_QR` or an optional direct solver);
+  `PSOR` does not.
+- Use a Newton-type integrator (`EULER_IMPLICIT`, `HHT`). `EULER_IMPLICIT_LINEARIZED` solves for the
+  new velocity rather than a correction, so velocity sensitivities act on the absolute velocity and shift
+  equilibria (for the demo motor, no-load speed becomes 15 rad/s instead of 30). The same applies to
+  stiff internal-state Jacobians of `ChExternalDynamicsODE`. Reflected inertia and position terms are
+  unaffected.
+- Reflected inertia adds \f$J_rgg^T\f$ to the mass matrix of the connected bodies. Rotor gyroscopic and
+  quadratic-velocity terms, and the geometric stiffness from a rotating actuator axis or direction, are
+  neglected; they vanish for a fixed axis or direction. With both bodies free, the reflected inertia acts on
+  the relative rate.
+
+`utest_CH_actuator_coupling` covers the block entries, reaction momentum conservation, reflected
+inertia and mass against closed forms, and stable large-step (\f$h=0.02\f$ s, \f$J/c\approx3\f$ ms)
+electric spin-up that diverges without coupling.
 
 Users integrating these bindings into an **external project** should follow `template_project/`,
 build/install Chrono, and use `find_package(Chrono CONFIG REQUIRED)` and `${CHRONO_TARGETS}`.

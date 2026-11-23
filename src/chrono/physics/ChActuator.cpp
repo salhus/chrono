@@ -61,6 +61,19 @@ void ChActuator::LoadKRMMatrices(double Kfactor, double Rfactor, double Mfactor)
     ChExternalDynamicsODE::LoadKRMMatrices(Kfactor, Rfactor, Mfactor);
 }
 
+void ChActuator::SetupCouplingKRM() {
+    // Drop any block from a previous Connect() (stale bodies or reallocated state variables).
+    m_KRM_coupling = ChKRMBlock();
+    if (!EnableCouplingKRM())
+        return;
+    std::vector<ChVariables*> vars;
+    vars.push_back(&m_body1->Variables());
+    vars.push_back(&m_body2->Variables());
+    if (GetNumStates() > 0)
+        vars.push_back(&Variables());
+    m_KRM_coupling.SetVariables(vars);
+}
+
 // -----------------------------------------------------------------------------
 
 ChLinearActuator::ChLinearActuator() : ChActuator(), s_0(0), s(0), sd(0), F0(0) {}
@@ -111,16 +124,12 @@ void ChLinearActuator::Connect(std::shared_ptr<ChBody> body1, std::shared_ptr<Ch
     s = s_0;
     sd = 0;
 
-    // Resize temporary vector of generalized body forces
-    m_Qforce.resize(12);
+    // Resize temporary vectors of generalized body forces
+    m_Qforce.setZero(12);
+    m_Qunit.setZero(12);
 
     // If enabled, set up the coupling KRM block
-    if (EnableCouplingKRM()) {
-        std::vector<ChVariables*> vars;
-        vars.push_back(&m_body1->Variables());
-        vars.push_back(&m_body2->Variables());
-        m_KRM_coupling.SetVariables(vars);
-    }
+    SetupCouplingKRM();
 }
 
 void ChLinearActuator::Update(double time, UpdateFlags update_flags) {
@@ -138,30 +147,22 @@ void ChLinearActuator::Update(double time, UpdateFlags update_flags) {
 
         s = (m_aloc1 - m_aloc2).Length();
         sd = Vdot(dir, avel1 - avel2);
+
+        // Generalized force per unit actuator force (also d(sd)/d(body velocities))
+        auto atorque1 = Vcross(m_aloc1 - m_body1->GetPos(), dir);   // absolute frame
+        auto atorque2 = Vcross(m_aloc2 - m_body2->GetPos(), -dir);  // absolute frame
+        m_Qunit.segment(0, 3) = dir.eigen();
+        m_Qunit.segment(3, 3) = m_body1->TransformDirectionParentToLocal(atorque1).eigen();
+        m_Qunit.segment(6, 3) = (-dir).eigen();
+        m_Qunit.segment(9, 3) = m_body2->TransformDirectionParentToLocal(atorque2).eigen();
     }
 
     // Internal dynamics must use the current connected-body kinematics.
     ChExternalDynamicsODE::Update(time, update_flags);
 
     if (is_attached) {
-        ChVector3d dir = (m_aloc1 - m_aloc2).GetNormalized();
-        ////std::cout << "time = " << time << "    s=" << s << "   sd=" << sd << std::endl;
-
-        // Actuator force
-        auto f = GetActuatorForce(time);
-        ChVector3d force = f * dir;
-
-        // Force and moment acting on body 1
-        auto atorque1 = Vcross(m_aloc1 - m_body1->GetPos(), force);          // applied torque (absolute frame)
-        auto ltorque1 = m_body1->TransformDirectionParentToLocal(atorque1);  // applied torque (local frame)
-        m_Qforce.segment(0, 3) = force.eigen();
-        m_Qforce.segment(3, 3) = ltorque1.eigen();
-
-        // Force and moment acting on body 2
-        auto atorque2 = Vcross(m_aloc2 - m_body2->GetPos(), -force);         // applied torque (absolute frame)
-        auto ltorque2 = m_body2->TransformDirectionParentToLocal(atorque2);  // applied torque (local frame)
-        m_Qforce.segment(6, 3) = -force.eigen();
-        m_Qforce.segment(9, 3) = ltorque2.eigen();
+        // Actuator force, applied as equal and opposite forces on the two bodies
+        m_Qforce = GetActuatorForce(time) * m_Qunit;
     }
 }
 
@@ -261,16 +262,12 @@ void ChRotationalActuator::Connect(std::shared_ptr<ChBody> body1, std::shared_pt
     m_turns = 0;
     m_last_angle = a;
 
-    // Resize temporary vector of generalized body forces
-    m_Qforce.resize(12);
+    // Resize temporary vectors of generalized body forces
+    m_Qforce.setZero(12);
+    m_Qunit.setZero(12);
 
     // If enabled, set up the coupling KRM block
-    if (EnableCouplingKRM()) {
-        std::vector<ChVariables*> vars;
-        vars.push_back(&m_body1->Variables());
-        vars.push_back(&m_body2->Variables());
-        m_KRM_coupling.SetVariables(vars);
-    }
+    SetupCouplingKRM();
 }
 
 void ChRotationalActuator::Update(double time, UpdateFlags update_flags) {
@@ -281,25 +278,21 @@ void ChRotationalActuator::Update(double time, UpdateFlags update_flags) {
         // Calculate current angle and angle rate
         CalcAngle();
         AdjustAngle();
+
+        // Generalized force per unit actuator torque (also d(ad)/d(body velocities)).
+        // The angle measures body 2 relative to body 1, so body 2 receives +axis and body 1 the reaction -axis.
+        m_Qunit.segment(0, 3).setZero();
+        m_Qunit.segment(3, 3) = m_body1->TransformDirectionParentToLocal(-m_axis).eigen();
+        m_Qunit.segment(6, 3).setZero();
+        m_Qunit.segment(9, 3) = m_body2->TransformDirectionParentToLocal(m_axis).eigen();
     }
 
     // Internal dynamics must use the current connected-body kinematics.
     ChExternalDynamicsODE::Update(time, update_flags);
 
     if (is_attached) {
-        // Calculate torque along actuator axis
-        auto t = GetActuatorTorque(time);
-        ChVector3d torque = t * m_axis;
-
-        // Force and moment acting on body 1
-        auto ltorque1 = m_body1->TransformDirectionParentToLocal(torque);
-        m_Qforce.segment(0, 3).setZero();
-        m_Qforce.segment(3, 3) = ltorque1.eigen();
-
-        // Force and moment acting on body 2
-        auto ltorque2 = m_body2->TransformDirectionParentToLocal(torque);
-        m_Qforce.segment(6, 3).setZero();
-        m_Qforce.segment(9, 3) = ltorque2.eigen();
+        // Actuator torque, applied as equal and opposite torques on the two bodies
+        m_Qforce = GetActuatorTorque(time) * m_Qunit;
     }
 }
 

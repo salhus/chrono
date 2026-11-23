@@ -108,4 +108,30 @@ bool ChActuatorModelRotational::CalculateJac(double time, const ChVectorDynamic<
     return true;
 }
 
+bool ChActuatorModelRotational::EnableCouplingKRM() {
+    m_coupling_active = actuator_coupling::ResolveCoupling(m_coupling_mode, *m_model);
+    return m_coupling_active;
+}
+
+void ChActuatorModelRotational::ComputeCouplingKRM(ChMatrixRef H, double Kfactor, double Rfactor, double Mfactor) {
+    double time = GetChTime();
+    auto y = actuator_coupling::CopyStates(GetStates(), m_model->GetNumStates());
+    actuator_models::ActuatorCommand command{GetInput(time), m_enabled};
+    actuator_models::ActuatorState state{GetActuatorAngle() - a_0, ad, time};
+    auto sensitivities = actuator_coupling::ComputeSensitivities(*m_model, y, command, state);
+    actuator_coupling::LoadCouplingKRM(H, m_Qunit, sensitivities, m_model->GetReflectedInertia(), Kfactor, Rfactor, Mfactor);
+}
+
+void ChActuatorModelRotational::IntLoadResidual_Mv(const unsigned int off, ChVectorDynamic<>& R, const ChVectorDynamic<>& w, const double c) {
+    ChActuator::IntLoadResidual_Mv(off, R, w, c);
+    if (is_attached && m_coupling_active)
+        actuator_coupling::LoadReflectedInertiaMv(m_body1, m_body2, m_Qunit, m_model->GetReflectedInertia(), R, w, c);
+}
+
+void ChActuatorModelRotational::IntLoadLumpedMass_Md(const unsigned int off, ChVectorDynamic<>& Md, double& err, const double c) {
+    ChActuator::IntLoadLumpedMass_Md(off, Md, err, c);
+    if (is_attached && m_coupling_active)
+        actuator_coupling::LoadReflectedInertiaLumped(m_body1, m_body2, m_Qunit, m_model->GetReflectedInertia(), Md, err, c);
+}
+
 }  // namespace chrono
