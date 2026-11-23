@@ -197,8 +197,9 @@ void ChExternalDynamicsODE::IntFromDescriptor(const unsigned int off_v,  // offs
 
 void ChExternalDynamicsODE::LoadKRMMatrices(double Kfactor, double Rfactor, double Mfactor) {
     if (IsStiff()) {
-        // Recall to flip sign to load R = -dQ/dv (K is zero here)
-        m_KRM.GetMatrix() = Mfactor * ChMatrixDynamic<>::Identity(m_nstates, m_nstates) - Rfactor * m_jac;
+        // Recall to flip sign to load R = -dQ/dv (K is zero here).
+        // The identity mass is already provided by m_variables; adding Mfactor*I here would double count it.
+        m_KRM.GetMatrix() = -Rfactor * m_jac;
     }
 }
 

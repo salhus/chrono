@@ -171,6 +171,17 @@ declare `GetReflectedInertia()`; the electric model adds `Parameters::rotor_iner
 N^2 * rotor_inertia, default 0) and `GetRatedStallEffort()`. `ChRotationalActuator` now applies the reaction
 torque with the opposite sign on body 1, so free-free actuators conserve angular momentum (previously
 both bodies received the same torque).
+Two new standard-library-only models: `ChPMSMActuatorModel`, a permanent-magnet synchronous machine with
+field-oriented PI current control, decoupling feedforward, a space-vector voltage limit with anti-windup, and
+active-short-circuit disabling (states `[i_d, i_q, z_d, z_q]`); and `ChHydraulicCylinderModel`, a double-acting
+cylinder driven by a critical-center proportional 4/3 valve with regularized orifice flow, position-dependent
+chamber compliance, leakage, and relief/anti-cavitation pressure bounds (states `[p_A, p_B]`, analytic Jacobian).
+`ActuatorTelemetry::electrical_power` is documented as the input power drawn from the source (bus, inverter,
+or hydraulic supply).
+Fixed `ChExternalDynamicsODE` double counting its identity mass (once through its variables and again in its
+KRM block when stiff). The resulting Newton matrix `2I - hJ` made the fixed-iteration `EULER_IMPLICIT` step
+lag the internal-state rate (about 6% for the hydraulic pressures) and halved state increments with
+`EULER_IMPLICIT_LINEARIZED`. `ChExternalDynamicsDAE` has the same pattern and is not changed here.
 
 ## [Changed] Chrono::Sensor appearance of shapes with no visual material
 

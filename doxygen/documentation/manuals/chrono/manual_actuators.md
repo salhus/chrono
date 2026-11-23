@@ -16,6 +16,8 @@ The headers in `src/chrono/physics/actuator_models/` implement models in
 - `ChActuatorSmoothing.h`: shared passive, speed-based transmission-loss crossover.
 - `ChElectricActuatorModel.h`: a DC equivalent circuit, transmission losses, and output friction.
 - `ChTabulatedActuatorModel.h`: measured effort envelopes, efficiency maps, and friction curves.
+- `ChPMSMActuatorModel.h`: a permanent-magnet synchronous machine with field-oriented current control.
+- `ChHydraulicCylinderModel.h`: a double-acting cylinder driven by a proportional 4/3 valve.
 
 These headers require C++17 but neither Chrono headers nor a Chrono library. They perform no file I/O.
 The bindings `chrono::ChActuatorModelLinear` and `chrono::ChActuatorModelRotational` belong to
@@ -109,10 +111,10 @@ selects the input-function evaluation time; it does not reconstruct historical s
 |---|---|
 | `applied_effort` | Final signed output force [N] or torque [N m], including friction and model constraints |
 | `mechanical_power` | Final applied effort times output velocity [W] |
-| `electrical_power` | Signed terminal/bus power [W]; electric model uses \f$Vi\f$ |
+| `electrical_power` | Signed input power drawn from the source [W]: \f$Vi\f$ (electric), \f$\tfrac32(v_di_d+v_qi_q)\f$ (PMSM), \f$p_sQ_s-p_TQ_T\f$ (hydraulic) |
 | `efficiency` | Instantaneous conversion ratio in [0,1], or the tabulated estimate |
-| `current` | Electric winding current [A]; zero if not supplied by the model |
-| `copper_loss` | Electric winding loss \f$Ri^2\f$ [W]; zero if not supplied |
+| `current` | Electric winding current (PMSM: phase amplitude \f$\sqrt{i_d^2+i_q^2}\f$) [A]; zero if not supplied by the model |
+| `copper_loss` | Electric winding loss \f$Ri^2\f$ (PMSM: \f$\tfrac32R(i_d^2+i_q^2)\f$) [W]; zero if not supplied |
 | `gear_loss` | Nonnegative transmission loss [W] for electric models; aggregate map conversion loss [W] for tabulated models |
 | `command_saturated` | An enabled normalized command was clipped |
 | `voltage_saturated` | An enabled electric voltage request exceeded the bus voltage |
@@ -532,6 +534,99 @@ this is **not a global \f$C^1\f$ claim at table knots**, endpoint clamps, or eff
 In particular, disabled friction can still be reported as absorbed mechanical power with an inferred
 bus return: this remains a phenomenological map, not an electrical disconnect or winding model.
 
+# PMSM with field-oriented control {#actuator_models_pmsm}
+
+`ChPMSMActuatorModel` represents a three-phase permanent-magnet synchronous machine with an inverter in
+**torque (current) mode**, followed by the same passive transmission loss and output friction as the
+electric model. It has four states \f$y=[i_d,i_q,z_d,z_q]\f$: rotor-frame currents [A] and the integrals of
+the current errors [A s]. With the amplitude-invariant Park transform, electrical speed
+\f$\omega_e=pNv\f$, and output speed \f$v\f$,
+\f[
+ L_d\dot i_d=v_d-Ri_d+\omega_eL_qi_q,\qquad
+ L_q\dot i_q=v_q-Ri_q-\omega_e(L_di_d+\psi),\qquad
+ T_m=\tfrac32p\left(\psi i_q+(L_d-L_q)i_di_q\right).
+\f]
+Two PI loops track \f$i_d^*=0\f$ and \f$i_q^*=u_cI_{\max}\f$ with \f$K_p=\omega_cL\f$ and \f$K_i=\omega_cR\f$
+(pole-zero cancellation: each closed loop is first order with bandwidth \f$\omega_c\f$) plus speed-voltage
+decoupling feedforward. The requested voltage vector is scaled onto the linear space-vector limit
+\f$V_{\max}=V_{\rm dc}/\sqrt3\f$; back-calculation with gain \f$1/K_p\f$ prevents integrator windup.
+Field weakening, MTPA, iron loss, and inverter switching are not modeled.
+Disabling the command applies zero phase voltage (an **active short circuit**) and relaxes the integrators.
+
+| Parameter | Units and requirements |
+|---|---|
+| `pole_pairs` | \f$p\geq1\f$ |
+| `resistance`, `inductance_d`, `inductance_q` | Per-phase \f$R\f$ [ohm], \f$L_d,L_q\f$ [H], positive |
+| `flux_linkage` | Magnet flux linkage amplitude \f$\psi\f$ [Wb], positive |
+| `bus_voltage` | DC link \f$V_{\rm dc}\f$ [V], positive |
+| `max_current` | Phase current amplitude limit [A], positive; sets the \f$i_q^*\f$ range |
+| `current_bandwidth` | Closed-loop current bandwidth \f$\omega_c\f$ [rad/s], positive |
+| `gear_ratio`, `motoring_efficiency`, `generating_efficiency`, `loss_smoothing_speed` | As in the electric model |
+| `coulomb_friction`, `viscous_friction`, `friction_smoothing_speed` | Output friction, as in the electric model |
+| `rotor_inertia` | Motor-side inertia [kg m\f$^2\f$], reflected as \f$N^2J_m\f$ (see @ref actuator_models_coupling) |
+
+Delivered effort is \f$e=NT_m-\ell(NT_m,v)-F_c\tanh(v/v_s)-bv\f$.
+The quasi-static `ComputeEffort()` assumes ideal tracking with \f$i_d=0\f$, reducing \f$|i_q|\f$ to the largest value
+whose steady terminal voltage satisfies \f$(\omega_eL_qi_q)^2+(Ri_q+\omega_e\psi)^2\leq V_{\max}^2\f$; when disabled
+it returns the steady short-circuit braking effort with
+\f$i_d=-\omega_e^2L_q\psi/\Delta\f$, \f$i_q=-R\omega_e\psi/\Delta\f$, \f$\Delta=R^2+\omega_e^2L_dL_q\f$.
+The integrated model is the reference; the quasi-static curve is exact whenever the voltage limit is inactive.
+
+Accessors: `GetTorqueConstant()` \f$=\tfrac32p\psi\f$, `GetVoltageLimit()` \f$=V_{\max}\f$,
+`GetNoLoadSpeed()` \f$=V_{\max}/(p\psi N)\f$ (output side), `GetPeakEffort()` \f$=N\tfrac32p\psi I_{\max}\f$, and
+`GetMagneticEnergy(y)` \f$=\tfrac34(L_di_d^2+L_qi_q^2)\f$.
+With the inverter power \f$P_b=\tfrac32(v_di_d+v_qi_q)\f$ the integrated model satisfies
+\f[
+ P_b=\tfrac32R(i_d^2+i_q^2)+\frac{d}{dt}\tfrac34(L_di_d^2+L_qi_q^2)+T_m\frac{\omega_e}{p},
+\f]
+and the transmission and friction terms follow the electric model's balance.
+The current loops are stiff (\f$1/\omega_c=0.5\f$ ms by default): the model reports `IsStiff()`, so
+`AUTO` coupling is active and steps much larger than \f$1/\omega_c\f$ remain stable.
+
+# Valve-controlled hydraulic cylinder {#actuator_models_hydraulic}
+
+`ChHydraulicCylinderModel` is a **linear** actuator: a double-acting cylinder driven by an ideal
+critical-center 4/3 proportional valve. The command is the normalized spool position \f$u\in[-1,1]\f$;
+\f$u>0\f$ connects supply to the cap chamber A and the rod chamber B to tank. Each metering edge passes
+\f[
+ Q=uK\,s(\Delta p),\qquad s(\Delta p)=\frac{\Delta p}{(\Delta p^2+p_t^2)^{1/4}},\qquad K=\frac{Q_{\rm nom}}{\sqrt{\Delta p_{\rm nom}}},
+\f]
+a turbulent square-root law regularized to a finite laminar slope below the transition pressure \f$p_t\f$.
+The two states are the chamber pressures [Pa]:
+\f[
+ \dot p_A=\frac{\beta}{V_A}\left(Q_A-A_Av-Q_l\right),\qquad
+ \dot p_B=\frac{\beta}{V_B}\left(Q_B+A_Bv+Q_l\right),\qquad Q_l=C(p_A-p_B),
+\f]
+with \f$V_A=V_{A0}+A_Ax\f$, \f$V_B=V_{B0}+A_B(s-x)\f$, and \f$x\f$ = `initial_position` plus the actuator
+displacement (clamped to the stroke for volumes). Ideal relief and anti-cavitation valves bound each pressure
+to \f$[p_T,p_r]\f$: outward derivatives are blocked at a bound and effort uses bounded pressures. The delivered
+force is \f$e=p_AA_A-p_BA_B-F_c\tanh(v/v_s)-bv\f$. Disabling centers the spool.
+End stops, spool dynamics, and line dynamics are not modeled.
+
+| Parameter | Units and requirements |
+|---|---|
+| `cap_area`, `annulus_area` | \f$A_A,A_B\f$ [m\f$^2\f$], positive |
+| `stroke`, `initial_position` | [m]; \f$0\leq x_0\leq s\f$ |
+| `dead_volume_cap`, `dead_volume_rod` | Including hoses [m\f$^3\f$], positive |
+| `bulk_modulus` | Effective \f$\beta\f$ [Pa], positive |
+| `supply_pressure`, `tank_pressure`, `relief_pressure` | Gauge [Pa], \f$p_T<p_s\leq p_r\f$ |
+| `initial_pressure` | Both chambers at start [Pa], in \f$[p_T,p_r]\f$ |
+| `nominal_flow`, `nominal_pressure_drop` | Per-edge rating [m\f$^3\f$/s] at [Pa], positive |
+| `transition_pressure` | \f$p_t\f$ [Pa], positive |
+| `leakage_coefficient` | Internal leakage \f$C\f$ [m\f$^3\f$/(s Pa)], nonnegative |
+| `coulomb_friction`, `viscous_friction`, `friction_smoothing_speed` | Seal friction [N], [N s/m], [m/s] |
+| `moving_mass` | Piston/rod mass not modeled as a body [kg]; reflected inertia |
+
+The quasi-static `ComputeEffort()` (incompressible, leak-free) inverts the orifice law for the pressures that
+pass exactly the displaced flows. A centered spool locks the chambers: a moving load meets relief and tank
+pressures, while at rest the indeterminate pressures are reported as the supply-tank mean.
+Telemetry reports the hydraulic input power \f$p_sQ_s-p_TQ_T\f$ as `electrical_power`.
+Accessors: `GetMaxExtendForce()` \f$=p_sA_A-p_TA_B\f$, `GetMaxRetractForce()`, `OrificeFlow(dp)`, and the locked
+stiffness `GetHydraulicStiffness(position)` \f$=\beta(A_A^2/V_A+A_B^2/V_B)\f$, which with mass \f$m\f$ gives the
+hydraulic natural frequency \f$\sqrt{k/m}\f$. Oil compressibility makes the pressure dynamics stiff, so the
+model provides an analytic Jacobian and `AUTO` coupling is active.
+For a symmetric cylinder with \f$p_T=0\f$ the no-load extension speed is \f$K\,s(p_s/2)/A\f$.
+
 # Using the models {#actuator_models_usage}
 
 ## External program: no Chrono library
@@ -774,9 +869,17 @@ The relevant existing test programs are:
   malformed-dimension rejection; connected linear displacement/current RHS; attached accumulated
   revolutions in both directions; telemetry from integrated rather than quasi-static current in
   both linear and rotational bindings.
-- `utest_CH_actuator_models_isolated`: instantiates and executes **both** electric and tabulated
-  models, including telemetry and disabled passive behavior, without Chrono or Eigen include
+- `utest_CH_actuator_models_isolated`: instantiates and executes the electric, tabulated, PMSM, and
+  hydraulic models, including telemetry and disabled passive behavior, without Chrono or Eigen include
   paths/linkage.
+- `utest_CH_actuator_coupling`: monolithic coupling block entries, reflected inertia, momentum
+  conservation, and large-step stability.
+- `utest_CH_actuator_model_library`: PMSM parameter validation, the electromechanical power identity,
+  first-order current loops at the design bandwidth, the voltage-limited torque-speed curve,
+  short-circuit braking, and Chrono spin-up to the no-load speed with an energy balance at fine and coarse
+  steps; hydraulic validation, stall forces and orifice rating, quasi-static no-load speed, pressure
+  bounds, analytic Jacobian against finite differences, implicit-step accuracy, Chrono no-load extension,
+  and the locked-cylinder natural frequency.
 - `utest_CH_actuators`: the underlying actuator integration path.
 
 For **developers modifying this repository**, initialize bundled test dependencies and configure
@@ -786,7 +889,7 @@ an out-of-source build explicitly:
 git submodule init
 git submodule update
 cmake -S . -B build -DBUILD_TESTING=ON -DBUILD_TESTING_BASE=ON -DBUILD_DEMOS=OFF
-cmake --build build --target utest_CH_actuator_models utest_CH_actuator_model_bindings utest_CH_actuator_models_isolated utest_CH_actuators --parallel 2
+cmake --build build --target utest_CH_actuator_models utest_CH_actuator_model_bindings utest_CH_actuator_models_isolated utest_CH_actuator_coupling utest_CH_actuator_model_library utest_CH_actuators --parallel 2
 ctest --test-dir build -R actuator --output-on-failure
 ~~~
 

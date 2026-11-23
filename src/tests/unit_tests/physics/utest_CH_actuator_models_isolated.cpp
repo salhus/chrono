@@ -16,6 +16,8 @@
 #include "ChActuatorSmoothing.h"
 #include "ChElectricActuatorModel.h"
 #include "ChTabulatedActuatorModel.h"
+#include "ChHydraulicCylinderModel.h"
+#include "ChPMSMActuatorModel.h"
 
 int main() {
     // The shared loss helper is also independently usable with standard-library headers only.
@@ -35,6 +37,18 @@ int main() {
     if (!(electric.current > 0 && electric.copper_loss > 0 && tabulated.applied_effort > 0 && tabulated.mechanical_power > 0 &&
           tabulated.electrical_power > tabulated.mechanical_power))
         return 2;
+    // Stateful library models are also standard-library only.
+    chrono::actuator_models::ChPMSMActuatorModel pmsm;
+    chrono::actuator_models::ChHydraulicCylinderModel cylinder;
+    std::vector<double> y, rhs;
+    pmsm.SetInitialConditions(y);
+    pmsm.CalculateRHS(0, y, command, state, rhs);
+    if (rhs.size() != 4 || !(pmsm.ComputeEffort(command, state) > 0))
+        return 5;
+    cylinder.SetInitialConditions(y);
+    cylinder.CalculateRHS(0, y, command, state, rhs);
+    if (rhs.size() != 2 || !(cylinder.ComputeEffort(command, {0, 0, 0}) > 0))
+        return 6;
     command.enabled = false;
     return electric_model.ComputeEffort(command, state) < 0 && tabulated_model.ComputeEffort(command, state) < 0 ? 0 : 3;
 }
